@@ -1,0 +1,173 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+服务器VIDEO接口文档
+server VIDEO interface
+2020-10-03
+ning
+(/server/video/video_interface.h)
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+################################################################################
+宏定义（MACRO）
+################################################################################
+可设置参数ID定义
+#define		VIDEO_CTRL_SWITCH						0x0000
+#define 	VIDEO_CTRL_IMAGE_ROLLOVER				0x0001
+#define 	VIDEO_CTRL_NIGHT_SHOT               	0x0002
+#define 	VIDEO_CTRL_TIME_WATERMARK           	0x0003
+#define 	VIDEO_CTRL_WDR_MODE                 	0x0004
+#define 	VIDEO_CTRL_GLIMMER_FULL_COLOR       	0x0005
+#define 	VIDEO_CTRL_RECORDING_MODE           	0x0006
+#define 	VIDEO_CTRL_MOTION_SWITCH          		0x0010
+#define 	VIDEO_CTRL_MOTION_ALARM_INTERVAL    	0x0011
+#define 	VIDEO_CTRL_MOTION_SENSITIVITY 			0x0012
+#define 	VIDEO_CTRL_MOTION_START		          	0x0013
+#define 	VIDEO_CTRL_MOTION_END		          	0x0014
+#define 	VIDEO_CTRL_CUSTOM_LOCAL_SAVE          	0x0100
+#define 	VIDEO_CTRL_CUSTOM_CLOUD_SAVE          	0x0101
+#define 	VIDEO_CTRL_CUSTOM_WARNING_PUSH         	0x0102
+#define 	VIDEO_CTRL_CUSTOM_DISTORTION          	0x0103
+#define		VIDEO_CTRL_QUALITY						0x1000
+
+################################################################################
+数据结构（STRUCT）
+################################################################################
+IOT参数结构体：提供给其他服务器的统一参数接口
+typedef struct video_iot_config_t {
+	int 	on;
+	int		image_roll;
+	int		night;
+	int		watermark;
+	int		wdr;
+	int		glimmer;
+	int		recording;
+	int		motion_switch;
+	int		motion_alarm;
+	int		motion_sensitivity;
+	char	motion_start[MAX_SYSTEM_STRING_SIZE];
+	char	motion_end[MAX_SYSTEM_STRING_SIZE];
+	int		custom_local_save;
+	int		custom_cloud_save;
+	int		custom_warning_push;	
+	int		custom_distortion;
+} video_iot_config_t;
+
+################################################################################
+消息（MESSAGE）
+################################################################################
+#define		MSG_VIDEO_BASE						(SERVER_VIDEO<<16)
+#define		MSG_VIDEO_SIGINT					MSG_VIDEO_BASE | 0x0000
+#define		MSG_VIDEO_SIGINT_ACK				MSG_VIDEO_BASE | 0x1000
+#define		MSG_VIDEO_START						MSG_VIDEO_BASE | 0x0010
+#define		MSG_VIDEO_START_ACK					MSG_VIDEO_BASE | 0x1010
+#define		MSG_VIDEO_STOP						MSG_VIDEO_BASE | 0x0011
+#define		MSG_VIDEO_STOP_ACK					MSG_VIDEO_BASE | 0x1011
+#define		MSG_VIDEO_CTRL						MSG_VIDEO_BASE | 0x0012
+#define		MSG_VIDEO_CTRL_ACK					MSG_VIDEO_BASE | 0x1012
+#define		MSG_VIDEO_CTRL_EXT					MSG_VIDEO_BASE | 0x0013
+#define		MSG_VIDEO_CTRL_EXT_ACK				MSG_VIDEO_BASE | 0x1013
+#define		MSG_VIDEO_CTRL_DIRECT				MSG_VIDEO_BASE | 0x0014
+#define		MSG_VIDEO_CTRL_DIRECT_ACK			MSG_VIDEO_BASE | 0x1014
+#define		MSG_VIDEO_GET_PARA					MSG_VIDEO_BASE | 0x0015
+#define		MSG_VIDEO_GET_PARA_ACK				MSG_VIDEO_BASE | 0x1015
+--------------------------------------------------------------------------------
+		MSG_VIDEO_SIGINT
+消息说明：		服务器发送SIGINT系统响应到MANAGER
+发送服务器：		VIDEO
+接受服务器：		MANAGER
+传入参数：		无
+返回消息：		无
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+		MSG_VIDEO_START
+消息说明：		启动VIDEO服务器，进入运行状态（RUN）
+发送服务器：		MIIO,MISS,MICLOUD,
+接受服务器：		VIDEO
+传入参数：		无
+返回消息：		必须
+		MSG_VIDEO_START_ACK
+传回参数：
+	result:		int						0:成功，其他失败
+--------------------------------------------------------------------------------	
+
+--------------------------------------------------------------------------------
+		MSG_VIDEO_STOP
+消息说明：		停止VIDEO服务器，进入停止状态（IDLE）
+发送服务器：		MIIO,MISS,MICLOUD,
+接受服务器：		VIDEO
+传入参数：		无
+返回消息：		必须
+		MSG_VIDEO_STOP_ACK
+传回参数：
+	result:		int						0:成功，其他失败
+--------------------------------------------------------------------------------	
+
+--------------------------------------------------------------------------------
+		MSG_VIDEO_GET_PARA
+消息说明：		从VIDEO服务器获取IOT参数
+发送服务器：		MIIO,MISS,
+接受服务器：		VIDEO
+传入参数：
+	arg_pass:	message_arg_t			回传参数
+返回消息：		必须
+		MSG_VIDEO_GET_PARA_ACK
+传回参数：
+	result:		int						0:成功，其他失败
+	arg_pass:	message_arg_t			回传参数，原样拷贝
+	arg:		*video_iot_config_t		结构指针
+	arg_size:	int						arg结构大小
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+		MSG_VIDEO_CTRL_DIRECT
+消息说明：		设置VIDEO服务器的参数，可以在运行状态设置
+发送服务器：		MIIO,MISS,
+接受服务器：		VIDEO
+传入参数：
+	arg_in:		message_arg_t			传入参数
+		cat:	int						需要配置参数的ID（参照上面的参数宏）
+	arg:		void*					需要配置的参数的值
+	arg_size:	int						需要配置的参数的值的大小
+	arg_pass:	message_arg_t			回传参数
+返回消息：		必须
+		MSG_VIDEO_CTRL_DIRECT_ACK
+传回参数：
+	result:		int						0:成功，其他失败
+	arg_pass:	message_arg_t			回传参数，原样拷贝
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+		MSG_VIDEO_CTRL
+消息说明：		设置VIDEO服务器的参数，必须停止VIDEO后才能设置
+发送服务器：		MIIO,MISS,
+接受服务器：		VIDEO
+传入参数：
+	arg_in:		message_arg_t			传入参数
+		cat:	int						需要配置参数的ID（参照上面的参数宏）
+	arg:		void*					需要配置的参数的值
+	arg_size:	int						需要配置的参数的值的大小
+	arg_pass:	message_arg_t			回传参数
+返回消息：		必须
+		MSG_VIDEO_CTRL
+传回参数：
+	result:		int						0:成功，其他失败
+	arg_pass:	message_arg_t			回传参数，原样拷贝
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+		MSG_VIDEO_CTRL_EXT
+消息说明：		设置VIDEO服务器的参数，必须要重新启动VIDEO后才能设置
+发送服务器：		MIIO,MISS,
+接受服务器：		VIDEO
+传入参数：
+	arg_in:		message_arg_t			传入参数
+		cat:	int						需要配置参数的ID（参照上面的参数宏）
+	arg:		void*					需要配置的参数的值
+	arg_size:	int						需要配置的参数的值的大小
+	arg_pass:	message_arg_t			回传参数
+返回消息：		必须
+		MSG_VIDEO_CTRL_EXT_ACK
+传回参数：
+	result:		int						0:成功，其他失败
+	arg_pass:	message_arg_t			回传参数，原样拷贝
+--------------------------------------------------------------------------------
