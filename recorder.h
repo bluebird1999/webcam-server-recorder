@@ -15,12 +15,15 @@
 /*
  * define
  */
-#define		TIMEOUT				3	//3s
-#define		ERR_NONE			0
-#define		ERR_NO_DATA			-1
-#define		ERR_TIME_OUT		-2
-#define		ERR_LOCK			-3
-#define		ERR_ERROR			-4
+#define		MAX_BETWEEN_RECODER_PAUSE		5		//5s
+#define		TIMEOUT							3		//3s
+
+#define		ERR_NONE						0
+#define		ERR_NO_DATA						-1
+#define		ERR_TIME_OUT					-2
+#define		ERR_LOCK						-3
+#define		ERR_ERROR						-4
+
 /*
  * structure
  */

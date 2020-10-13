@@ -64,6 +64,11 @@ static int recorder_check_finish( recorder_job_t *ctrl );
 static int recorder_func_error( recorder_job_t *ctrl);
 static int recorder_func_pause( recorder_job_t *ctrl);
 static int recorder_destroy( recorder_job_t *ctrl );
+static int recorder_func_start_stream( recorder_job_t *ctrl );
+static int recorder_func_stop_stream( recorder_job_t *ctrl );
+static int recorder_check_and_exit_stream( recorder_job_t *ctrl );
+static int count_job_other_live(int myself);
+static int recorder_start_init_recorder_job(void);
 
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -74,6 +79,72 @@ static int recorder_destroy( recorder_job_t *ctrl );
 /*
  * helper
  */
+static int recorder_start_init_recorder_job(void)
+{
+	message_t msg;
+	recorder_init_t init;
+	int ret=0;
+	/********message body********/
+	msg_init(&msg);
+	msg.message = MSG_RECORDER_START;
+	msg.sender = msg.receiver = SERVER_RECORDER;
+	init.mode = RECORDER_MODE_BY_TIME;
+	init.type = RECORDER_TYPE_NORMAL;
+	init.audio = config.profile.normal_audio;
+	memcpy( &(init.start),config.profile.normal_start, strlen(config.profile.normal_start));
+	memcpy( &(init.stop),config.profile.normal_end, strlen(config.profile.normal_end));
+	init.repeat = config.profile.normal_repeat;
+	init.repeat_interval = config.profile.normal_repeat_interval;
+	init.quality = config.profile.normal_quality;
+	msg.arg = &init;
+	msg.arg_size = sizeof(recorder_init_t);
+	ret = server_recorder_message(&msg);
+	/********message body********/
+	return ret;
+}
+
+static int recorder_func_start_stream( recorder_job_t *ctrl )
+{
+	message_t msg;
+    /********message body********/
+	memset(&msg,0,sizeof(message_t));
+	msg.message = MSG_VIDEO_START;
+	msg.sender = msg.receiver = SERVER_RECORDER;
+    if( server_video_message(&msg)!=0 ) {
+    	log_err("video start failed from recorder!");
+    }
+    if( ctrl->init.audio ) {
+		memset(&msg,0,sizeof(message_t));
+		msg.message = MSG_AUDIO_START;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		if( server_audio_message(&msg)!=0 ) {
+			log_err("audio start failed from recorder!");
+		}
+    }
+    /****************************/
+}
+
+static int recorder_func_stop_stream( recorder_job_t *ctrl )
+{
+	message_t msg;
+    /********message body********/
+	memset(&msg,0,sizeof(message_t));
+	msg.message = MSG_VIDEO_STOP;
+	msg.sender = msg.receiver = SERVER_RECORDER;
+    if( server_video_message(&msg)!=0 ) {
+    	log_err("video stop failed from recorder!");
+    }
+    if( ctrl->init.audio ) {
+		memset(&msg,0,sizeof(message_t));
+		msg.message = MSG_AUDIO_STOP;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		if( server_audio_message(&msg)!=0 ) {
+			log_err("audio stop failed from recorder!");
+		}
+    }
+    /****************************/
+}
+
 static int recorder_check_finish( recorder_job_t *ctrl )
 {
 	int ret = 0;
@@ -83,6 +154,7 @@ static int recorder_check_finish( recorder_job_t *ctrl )
 		ret = 1;
 	return ret;
 }
+
 static int recorder_func_close( recorder_job_t *ctrl )
 {
 	char oldname[MAX_SYSTEM_STRING_SIZE*2];
@@ -114,7 +186,7 @@ static int recorder_func_close( recorder_job_t *ctrl )
 		strcpy( &prefix, ctrl->config.profile.motion_prefix);
 	else if( ctrl->init.type == RECORDER_TYPE_ALARM)
 		strcpy( &prefix, ctrl->config.profile.alarm_prefix);
-	snprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
+	sprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
 	ret = rename(oldname, ctrl->run.file_path);
 	if(ret) {
 		log_err("rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
@@ -142,6 +214,7 @@ static int recorder_write_mp4_video( recorder_job_t *ctrl, message_t *msg )
 							info->width,
 							info->height,
 							nalu.data[1], nalu.data[2], nalu.data[3], 3);
+//					ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000, 90000/15, 800, 600,0x4d, 0x40, 0x1f, 3);
 					if( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
 						return -1;
 					}
@@ -199,21 +272,22 @@ static int recorder_func_init_mp4v2( recorder_job_t *ctrl)
 	else if( ctrl->init.type == RECORDER_TYPE_ALARM)
 		strcpy( &prefix, ctrl->config.profile.alarm_prefix);
 	time_stamp_to_date(ctrl->run.start, timestr);
-	memset(timestr,0,sizeof(timestr));
-	strcpy( timestr, "202010091503" );
-	snprintf(fname,"%s%s/%s-%s",MAX_SYSTEM_STRING_SIZE*2, ctrl->config.profile.directory,prefix,prefix,timestr);
+	sprintf(fname,"%s%s/%s-%s",ctrl->config.profile.directory,prefix,prefix,timestr);
 	ctrl->run.mp4_file = MP4CreateEx(fname,	0, 1, 1, 0, 0, 0, 0);
 	if ( ctrl->run.mp4_file == MP4_INVALID_FILE_HANDLE) {
 		printf("MP4CreateEx file failed.\n");
 		return -1;
 	}
 	MP4SetTimeScale( ctrl->run.mp4_file, 90000);
-	ctrl->run.audio_track = MP4AddALawAudioTrack( ctrl->run.mp4_file, ctrl->config.profile.quality[ctrl->init.quality].audio_sample);
-	if ( ctrl->run.audio_track == MP4_INVALID_TRACK_ID) {
-		printf("add audio track failed.\n");
-		return -1;
+	if( ctrl->init.audio ) {
+		ctrl->run.audio_track = MP4AddALawAudioTrack( ctrl->run.mp4_file, ctrl->config.profile.quality[ctrl->init.quality].audio_sample);
+		if ( ctrl->run.audio_track == MP4_INVALID_TRACK_ID) {
+			printf("add audio track failed.\n");
+			return -1;
+		}
+		MP4SetTrackIntegerProperty( ctrl->run.mp4_file, ctrl->run.audio_track, "mdia.minf.stbl.stsd.alaw.channels", 1);
+		MP4SetTrackIntegerProperty( ctrl->run.mp4_file, ctrl->run.audio_track, "mdia.minf.stbl.stsd.alaw.sampleSize", 8);
 	}
-	MP4SetTrackIntegerProperty( ctrl->run.mp4_file, ctrl->run.audio_track, "mdia.minf.stbl.stsd.alaw.channels", 1);
 	memset( ctrl->run.file_path, 0, sizeof(ctrl->run.file_path));
 	strcpy(ctrl->run.file_path, fname);
 	return ret;
@@ -222,22 +296,34 @@ static int recorder_func_init_mp4v2( recorder_job_t *ctrl)
 static int recorder_func_error( recorder_job_t *ctrl)
 {
 	int ret = 0;
+	log_err("errors in this recorder thread, stop!");
+	ctrl->run.exit = 1;
 	return ret;
 }
 
 static int recorder_func_pause( recorder_job_t *ctrl)
 {
 	int ret = 0;
-	long long int temp = 0;
+	long long int temp1 = 0, temp2 = 0;
 	if( ctrl->init.repeat==0 ) {
 		ctrl->run.exit = 1;
 		return 0;
 	}
 	else {
-		temp = ctrl->run.start;
-		ctrl->run.start = ctrl->run.stop + ctrl->init.repeat_interval;
-		ctrl->run.stop = ctrl->run.start + (ctrl->run.stop - temp);
+		temp1 = ctrl->run.start;
+		temp2 = ctrl->run.stop;
+		memset( &ctrl->run, 0, sizeof( recorder_run_t));
+		ctrl->run.start = temp2 + ctrl->init.repeat_interval;
+		ctrl->run.stop = ctrl->run.start + (temp2 - temp1);
 		ctrl->status = RECORDER_THREAD_STARTED;
+		log_info("-------------add recursive recorder---------------------");
+		log_info("now=%ld", time_get_now_stamp());
+		log_info("start=%ld", ctrl->run.start);
+		log_info("end=%ld", ctrl->run.stop);
+		log_info("--------------------------------------------------");
+	}
+	if( time_get_now_stamp() < (ctrl->run.start - MAX_BETWEEN_RECODER_PAUSE) ) {
+		recorder_check_and_exit_stream(ctrl);
 	}
 	return ret;
 }
@@ -245,7 +331,7 @@ static int recorder_func_pause( recorder_job_t *ctrl)
 static int recorder_func_run( recorder_job_t *ctrl)
 {
 	message_t		vmsg, amsg;
-	int ret_video, 	ret_audio, ret;
+	int 			ret_video = 1, 	ret_audio = 1, ret;
 	av_data_info_t *info;
 	unsigned char	*p;
 	char			flag;
@@ -264,19 +350,21 @@ static int recorder_func_run( recorder_job_t *ctrl)
 		goto exit;
 	}
     //read audio frame
-	ret = pthread_rwlock_wrlock(&video_buff.lock);
-	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
-		ret = ERR_LOCK;
-		goto exit;
-	}
-	msg_init(&amsg);
-	ret_audio = msg_buffer_pop(&audio_buff, &amsg);
-	ret = pthread_rwlock_unlock(&audio_buff.lock);
-	if (ret) {
-		log_err("add message unlock fail, ret = %d\n", ret);
-		ret = ERR_LOCK;
-		goto exit;
+	if( ctrl->init.audio ) {
+		ret = pthread_rwlock_wrlock(&audio_buff.lock);
+		if(ret)	{
+			log_err("add message lock fail, ret = %d\n", ret);
+			ret = ERR_LOCK;
+			goto exit;
+		}
+		msg_init(&amsg);
+		ret_audio = msg_buffer_pop(&audio_buff, &amsg);
+		ret = pthread_rwlock_unlock(&audio_buff.lock);
+		if (ret) {
+			log_err("add message unlock fail, ret = %d\n", ret);
+			ret = ERR_LOCK;
+			goto exit;
+		}
 	}
 	if( ret_audio && ret_video ) {	//no data
 		usleep(10000);
@@ -297,22 +385,22 @@ static int recorder_func_run( recorder_job_t *ctrl)
 		p = (unsigned char*)vmsg.extra;
 		flag = p[4];
 		if( !ctrl->run.i_frame_read ) {
-			if( h264_is_iframe( &flag )  ) {
+			if( flag != 0x41  ) {
 				ctrl->run.i_frame_read = 1;
 				ctrl->run.real_start = time_get_now_stamp();
 				ctrl->run.fps = info->fps;
 				ctrl->run.width = info->width;
 				ctrl->run.height = info->height;
 			}
+			else {
+				ret = ERR_NO_DATA;
+				goto exit;
+			}
 		}
-		else {
+/*		if( flag==0x41 ) {
 			ret = ERR_NO_DATA;
 			goto exit;
-		}
-		if( !h264_is_iframe(&flag) && !h264_is_pframe(&flag) ) {
-			ret = ERR_NO_DATA;
-			goto exit;
-		}
+		}*/
 		if( info->fps != ctrl->run.fps) {
 			log_err("the video fps has changed, stop recording!");
 			ret = ERR_ERROR;
@@ -323,7 +411,7 @@ static int recorder_func_run( recorder_job_t *ctrl)
 			ret = ERR_ERROR;
 			goto close_exit;
 		}
-		ret = recorder_write_mp4_video( &ctrl, &vmsg );
+		ret = recorder_write_mp4_video( ctrl, &vmsg );
 		if(ret < 0) {
 			log_err("MP4WriteSample video failed.\n");
 			ret = ERR_NO_DATA;
@@ -331,6 +419,7 @@ static int recorder_func_run( recorder_job_t *ctrl)
 		}
 		ctrl->run.last_write = time_get_now_stamp();
 		if( recorder_check_finish(ctrl) ) {
+			log_info("------------stop=%d------------", time_get_now_stamp());
 			log_info("recording finished!");
 			goto close_exit;
 		}
@@ -356,28 +445,15 @@ static int recorder_func_started( recorder_job_t *ctrl )
 {
 	int ret;
 	if( time_get_now_stamp() >= ctrl->run.start ) {
+		log_info("------------start=%ld------------", time_get_now_stamp());
 		ret = recorder_func_init_mp4v2( ctrl );
 		if( ret ) {
 			log_err("init mp4v2 failed!");
-			ctrl->status == RECORDER_THREAD_ERROR;
+			ctrl->status = RECORDER_THREAD_ERROR;
 		}
 		else {
-			ctrl->status == RECORDER_THREAD_RUN;
-		    /********message body********/
-			message_t msg;
-			memset(&msg,0,sizeof(message_t));
-			msg.message = MSG_VIDEO_START;
-			msg.sender = msg.receiver = SERVER_RECORDER;
-		    if( server_video_message(&msg)!=0 ) {
-		    	log_err("video start failed from recorder!");
-		    }
-			memset(&msg,0,sizeof(message_t));
-			msg.message = MSG_AUDIO_START;
-			msg.sender = msg.receiver = SERVER_RECORDER;
-		    if( server_audio_message(&msg)!=0 ) {
-		    	log_err("audio start failed from recorder!");
-		    }
-		    /****************************/
+			ctrl->status = RECORDER_THREAD_RUN;
+			recorder_func_start_stream( ctrl );
 		}
 	}
 	else
@@ -415,6 +491,24 @@ static int *recorder_func(void *arg)
     pthread_exit(0);
 }
 
+static int recorder_check_and_exit_stream( recorder_job_t *ctrl )
+{
+	int ret=0,ret1;
+	int i;
+	ret = pthread_rwlock_wrlock(&info.lock);
+	if(ret)	{
+		log_err("add message lock fail, ret = %d\n", ret);
+		return ret;
+	}
+	if( !count_job_other_live(ctrl->t_id) ) {
+		recorder_func_stop_stream( ctrl );
+	}
+	ret1 = pthread_rwlock_unlock(&info.lock);
+	if (ret1)
+		log_err("add message unlock fail, ret = %d\n", ret1);
+	return ret;
+}
+
 static int recorder_destroy( recorder_job_t *ctrl )
 {
 	int ret=0,ret1;
@@ -425,23 +519,10 @@ static int recorder_destroy( recorder_job_t *ctrl )
 		return ret;
 	}
 	misc_set_bit(&info.thread_exit, ctrl->t_id, 1);
+	memset(ctrl, 0, sizeof(recorder_job_t));
 	memset(&jobs[ctrl->t_id], 0, sizeof(recorder_job_t));
 	if( info.thread_exit == 0) {
-	    /********message body********/
-		message_t msg;
-		memset(&msg,0,sizeof(message_t));
-		msg.message = MSG_VIDEO_STOP;
-		msg.sender = msg.receiver = SERVER_RECORDER;
-	    if( server_video_message(&msg)!=0 ) {
-	    	log_err("video start failed from recorder!");
-	    }
-		memset(&msg,0,sizeof(message_t));
-		msg.message = MSG_AUDIO_STOP;
-		msg.sender = msg.receiver = SERVER_RECORDER;
-	    if( server_audio_message(&msg)!=0 ) {
-	    	log_err("audio start failed from recorder!");
-	    }
-	    /****************************/
+		recorder_func_stop_stream( ctrl );
 	}
 	ret1 = pthread_rwlock_unlock(&info.lock);
 	if (ret1)
@@ -498,6 +579,16 @@ static int recorder_send_ack(message_t *msg, int id, int receiver, int result, v
 	return ret;
 }
 
+static int count_job_other_live(int myself)
+{
+	int i,num=0;
+	for( i=0; i<MAX_RECORDER_JOB; i++ ) {
+		if( (jobs[i].status>0) && (i!=myself) )
+			num++;
+	}
+	return num;
+}
+
 static int count_job_number(void)
 {
 	int i,num=0;
@@ -524,9 +615,15 @@ static int recorder_add_job( message_t* msg )
 			else jobs[i].run.start = time_date_to_stamp(jobs[i].init.start);
 			if (jobs[i].init.stop[0] == '0') jobs[i].run.stop = jobs[i].run.start + config.profile.max_length;
 			else jobs[i].run.stop = time_date_to_stamp(jobs[i].init.stop);
-			if( (jobs[i].run.stop - jobs[i].run.start) < config.profile.min_length )
+			if( (jobs[i].run.stop - jobs[i].run.start) < config.profile.min_length ||
+					(jobs[i].run.stop - jobs[i].run.start) > config.profile.max_length )
 				jobs[i].run.stop = jobs[i].run.start + jobs[i].config.profile.max_length;
 			jobs[i].status = RECORDER_THREAD_INITED;
+			log_info("-------------add new recorder---------------------");
+			log_info("now=%ld", time_get_now_stamp());
+			log_info("start=%ld", jobs[i].run.start);
+			log_info("end=%ld", jobs[i].run.stop);
+			log_info("--------------------------------------------------");
 			break;
 		}
 	}
@@ -616,10 +713,6 @@ static int server_message_proc(void)
 		return 0;
 	switch(msg.message) {
 		case MSG_RECORDER_START:
-			if( info.status != STATUS_RUN) {
-				recorder_send_ack(&send_msg, MSG_RECORDER_START, msg.receiver, -1, 0, 0);
-				break;
-			}
 			if( recorder_add_job(&msg) ) ret = -1;
 			else ret = 0;
 				recorder_send_ack(&send_msg, MSG_RECORDER_START, msg.receiver, ret, 0, 0);
@@ -647,6 +740,26 @@ static int server_message_proc(void)
 	return ret;
 }
 
+static int heart_beat_proc(void)
+{
+	int ret = 0;
+	message_t msg;
+	long long int tick = 0;
+	tick = time_get_now_stamp();
+	if( (tick - info.tick) > 10 ) {
+		info.tick = tick;
+	    /********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MANAGER_HEARTBEAT;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		msg.arg_in.cat = info.status;
+		msg.arg_in.dog = info.thread_start;
+		ret = manager_message(&msg);
+		/***************************/
+	}
+	return ret;
+}
+
 /*
  * task
  */
@@ -659,12 +772,12 @@ static void task_error(void)
 	switch( info.status ) {
 		case STATUS_ERROR:
 			log_err("!!!!!!!!error in recorder, restart in 5 s!");
-			info.tick = time_get_now_ms();
+			info.tick = time_get_now_stamp();
 			info.status = STATUS_NONE;
 			break;
 		case STATUS_NONE:
-			tick = time_get_now_ms();
-			if( (tick - info.tick) > 5000 ) {
+			tick = time_get_now_stamp();
+			if( (tick - info.tick) > 5 ) {
 				info.exit = 1;
 				info.tick = tick;
 			}
@@ -692,8 +805,10 @@ static void task_default(void)
 			else sleep(1);
 			break;
 		case STATUS_WAIT:
-			if( config.status == ( (1<<CONFIG_RECORDER_MODULE_NUM) -1 ) )
+			if( config.status == ( (1<<CONFIG_RECORDER_MODULE_NUM) -1 ) ) {
 				info.status = STATUS_SETUP;
+				recorder_start_init_recorder_job();
+			}
 			else usleep(1000);
 			break;
 		case STATUS_SETUP:
@@ -742,6 +857,7 @@ static void *server_func(void)
 	while( !info.exit ) {
 		info.task.func();
 		server_message_proc();
+		heart_beat_proc();
 	}
 	if( info.exit ) {
 		while( info.thread_exit != info.thread_start ) {
@@ -771,6 +887,8 @@ int server_recorder_start(void)
 	int ret=-1;
 	msg_buffer_init(&message, MSG_BUFFER_OVERFLOW_NO);
 	pthread_rwlock_init(&info.lock, NULL);
+	pthread_rwlock_init(&video_buff.lock, NULL);
+	pthread_rwlock_init(&audio_buff.lock, NULL);
 	ret = pthread_create(&info.id, NULL, server_func, NULL);
 	if(ret != 0) {
 		log_err("recorder server create error! ret = %d",ret);
