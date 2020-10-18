@@ -18,19 +18,21 @@
 #include <rtscamkit.h>
 #include <rtsavapi.h>
 #include <rtsvideo.h>
+#include <malloc.h>
+#include <dmalloc.h>
 //program header
 #include "../../manager/manager_interface.h"
 #include "../../server/realtek/realtek_interface.h"
 #include "../../tools/tools_interface.h"
-#include "../../server/config/config_recorder_interface.h"
 #include "../../server/recorder/recorder_interface.h"
-#include "../../server/config/config_interface.h"
 #include "../../server/miio/miio_interface.h"
 #include "../../server/video/video_interface.h"
 #include "../../server/audio/audio_interface.h"
+#include "../../server/device/device_interface.h"
 //server header
 #include "recorder.h"
 #include "recorder_interface.h"
+#include "config.h"
 
 /*
  * static
@@ -42,6 +44,7 @@ static	recorder_config_t		config;
 static 	message_buffer_t		video_buff;
 static 	message_buffer_t		audio_buff;
 static 	recorder_job_t			jobs[MAX_RECORDER_JOB];
+static	int						sw[MAX_RECORDER_JOB];
 
 //function
 //common
@@ -69,7 +72,11 @@ static int recorder_func_stop_stream( recorder_job_t *ctrl );
 static int recorder_check_and_exit_stream( recorder_job_t *ctrl );
 static int count_job_other_live(int myself);
 static int recorder_start_init_recorder_job(void);
-
+static int recorder_process_direct_ctrl(message_t *msg);
+static int send_iot_ack(message_t *org_msg, message_t *msg, int id, int receiver, int result, void *arg, int size);
+static int send_message(int receiver, message_t *msg);
+static int recorder_get_iot_config(recorder_iot_config_t *tmp);
+static int recorder_quit_all(int id);
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -79,6 +86,113 @@ static int recorder_start_init_recorder_job(void);
 /*
  * helper
  */
+static int recorder_quit_all(int id)
+{
+	int ret = 0;
+	int i;
+	ret = pthread_rwlock_wrlock(&info.lock);
+	if(ret)	{
+		log_err("add message lock fail, ret = %d\n", ret);
+		return ret;
+	}
+	for( i=0; i<MAX_RECORDER_JOB; i++ ) {
+		if( id !=-1 && i!=id ) continue;
+		sw[i] = 1;
+	}
+	ret = pthread_rwlock_unlock(&info.lock);
+	if (ret) {
+		log_err("add message unlock fail, ret = %d\n", ret);
+	}
+	return ret;
+}
+
+static int send_iot_ack(message_t *org_msg, message_t *msg, int id, int receiver, int result, void *arg, int size)
+{
+	int ret = 0;
+    /********message body********/
+	msg_init(msg);
+	memcpy(&(msg->arg_pass), &(org_msg->arg_pass),sizeof(message_arg_t));
+	msg->message = id | 0x1000;
+	msg->sender = msg->receiver = SERVER_RECORDER;
+	msg->result = result;
+	msg->arg = arg;
+	msg->arg_size = size;
+	ret = send_message(receiver, msg);
+	/***************************/
+	return ret;
+}
+
+static int send_message(int receiver, message_t *msg)
+{
+	int st;
+	switch(receiver) {
+	case SERVER_DEVICE:
+		break;
+	case SERVER_KERNEL:
+		break;
+	case SERVER_REALTEK:
+		break;
+	case SERVER_MIIO:
+		st = server_miio_message(msg);
+		break;
+	case SERVER_MISS:
+		st = server_miss_message(msg);
+		break;
+	case SERVER_MICLOUD:
+		break;
+	case SERVER_AUDIO:
+		st = server_audio_message(msg);
+		break;
+	case SERVER_RECORDER:
+		break;
+	case SERVER_PLAYER:
+		break;
+	case SERVER_MANAGER:
+		st = manager_message(msg);
+		break;
+	}
+	return st;
+}
+
+static int recorder_get_iot_config(recorder_iot_config_t *tmp)
+{
+	int ret = 0, st;
+	memset(tmp,0,sizeof(recorder_iot_config_t));
+	st = info.status;
+	if( st <= STATUS_WAIT ) return -1;
+	tmp->local_save = config.profile.enable;
+	tmp->recording_mode = config.profile.mode;
+	return ret;
+}
+
+static int recorder_process_direct_ctrl(message_t *msg)
+{
+	int ret=0;
+	message_t send_msg;
+	if( msg->arg_in.cat == RECORDER_CTRL_LOCAL_SAVE ) {
+		int temp = *((int*)(msg->arg));
+		if( temp != config.profile.enable) {
+			if( config.profile.enable == 1 ) {
+				recorder_quit_all(-1);
+				info.status = STATUS_WAIT;
+			}
+			config.profile.enable = temp;
+			log_info("changed the enable = %d", config.profile.enable);
+			config_recorder_set(CONFIG_RECORDER_PROFILE, &config.profile);
+		}
+	}
+	else if( msg->arg_in.cat == RECORDER_CTRL_RECORDING_MODE ) {
+		int temp = *((int*)(msg->arg));
+		if( temp != config.profile.mode) {
+			config.profile.mode = temp;
+			log_info("changed the mode = %d", config.profile.mode);
+			config_recorder_set(CONFIG_RECORDER_PROFILE, &config.profile);
+		}
+	}
+	ret = send_iot_ack(msg, &send_msg, MSG_RECORDER_CTRL_DIRECT, msg->receiver, ret, 0, 0);
+	return ret;
+}
+
 static int recorder_start_init_recorder_job(void)
 {
 	message_t msg;
@@ -86,7 +200,7 @@ static int recorder_start_init_recorder_job(void)
 	int ret=0;
 	/********message body********/
 	msg_init(&msg);
-	msg.message = MSG_RECORDER_START;
+	msg.message = MSG_RECORDER_ADD;
 	msg.sender = msg.receiver = SERVER_RECORDER;
 	init.mode = RECORDER_MODE_BY_TIME;
 	init.type = RECORDER_TYPE_NORMAL;
@@ -165,6 +279,9 @@ static int recorder_func_close( recorder_job_t *ctrl )
 	if(ctrl->run.mp4_file != MP4_INVALID_FILE_HANDLE) {
 		log_info("+++MP4Close\n");
 		MP4Close(ctrl->run.mp4_file, MP4_CLOSE_DO_NOT_COMPUTE_BITRATE);
+	}
+	else {
+		return -1;
 	}
 	if( (ctrl->run.last_write - ctrl->run.real_start) < ctrl->config.profile.min_length ) {
 		log_info("Recording file %s is too short, removed!", ctrl->run.file_path);
@@ -425,7 +542,7 @@ static int recorder_func_run( recorder_job_t *ctrl)
 		}
 	}
 exit:
-	if( !ret_audio )
+	if( !ret_video )
 		msg_free(&vmsg);
     if( !ret_audio )
     	msg_free(&amsg);
@@ -434,7 +551,9 @@ close_exit:
 	ret = recorder_func_close(ctrl);
 	if( !ret )
 		ctrl->status = RECORDER_THREAD_PAUSE;
-	if( !ret_audio )
+	else
+		ctrl->status = RECORDER_THREAD_PAUSE;
+	if( !ret_video )
 		msg_free(&vmsg);
     if( !ret_audio )
     	msg_free(&amsg);
@@ -469,7 +588,7 @@ static int *recorder_func(void *arg)
     pthread_detach(pthread_self());
 
     ctrl.status = RECORDER_THREAD_STARTED;
-    while( !info.exit && !ctrl.run.exit ) {
+    while( !info.exit && !ctrl.run.exit && !sw[ctrl.t_id] ) {
     	switch( ctrl.status ) {
     		case RECORDER_THREAD_STARTED:
     			recorder_func_started(&ctrl);
@@ -518,12 +637,14 @@ static int recorder_destroy( recorder_job_t *ctrl )
 		log_err("add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
-	misc_set_bit(&info.thread_exit, ctrl->t_id, 1);
-	memset(ctrl, 0, sizeof(recorder_job_t));
-	memset(&jobs[ctrl->t_id], 0, sizeof(recorder_job_t));
-	if( info.thread_exit == 0) {
+	recorder_func_close( ctrl );
+	misc_set_bit(&info.thread_start, ctrl->t_id, 0);
+	if( info.thread_start == 0) {
 		recorder_func_stop_stream( ctrl );
 	}
+	memset(ctrl, 0, sizeof(recorder_job_t));
+	memset(&jobs[ctrl->t_id], 0, sizeof(recorder_job_t));
+	sw[ctrl->t_id] = 0;
 	ret1 = pthread_rwlock_unlock(&info.lock);
 	if (ret1)
 		log_err("add message unlock fail, ret = %d\n", ret1);
@@ -534,9 +655,6 @@ static int recorder_send_message(int receiver, message_t *msg)
 {
 	int st;
 	switch(receiver) {
-	case SERVER_CONFIG:
-		st = server_config_message(msg);
-		break;
 	case SERVER_DEVICE:
 		break;
 	case SERVER_KERNEL:
@@ -633,7 +751,9 @@ static int recorder_add_job( message_t* msg )
 
 static int recorder_main(void)
 {
-	int ret, i;
+	int ret = 0, i;
+	if( !config.profile.enable )
+		return ret;
 	for( i=0; i<MAX_RECORDER_JOB; i++) {
 		switch( jobs[i].status ) {
 			case RECORDER_THREAD_INITED:
@@ -690,6 +810,7 @@ static int server_message_proc(void)
 {
 	int ret = 0, ret1 = 0;
 	message_t msg,send_msg;
+	recorder_iot_config_t tmp;
 	msg_init(&msg);
 	ret = pthread_rwlock_wrlock(&message.lock);
 	if(ret)	{
@@ -712,28 +833,50 @@ static int server_message_proc(void)
 	else if( ret == 1)
 		return 0;
 	switch(msg.message) {
-		case MSG_RECORDER_START:
+		case MSG_RECORDER_ADD:
 			if( recorder_add_job(&msg) ) ret = -1;
 			else ret = 0;
-				recorder_send_ack(&send_msg, MSG_RECORDER_START, msg.receiver, ret, 0, 0);
+			recorder_send_ack(&send_msg, MSG_RECORDER_ADD, msg.receiver, ret, 0, 0);
+			break;
+		case MSG_RECORDER_ADD_ACK:
 			break;
 		case MSG_MANAGER_EXIT:
 			info.exit = 1;
-			break;
-		case MSG_CONFIG_READ_ACK:
-			if( msg.result==0 )
-				memcpy( (recorder_config_t*)(&config), (recorder_config_t*)msg.arg, msg.arg_size);
 			break;
 		case MSG_MANAGER_TIMER_ACK:
 			((HANDLER)msg.arg_in.handler)();
 			break;
 		case MSG_DEVICE_GET_PARA_ACK:
-/*			device_iot_config_t *temp = (device_iot_config_t*)msg.arg;
-			if( temp ) {
-				if( info.status == STATUS_IDLE )
-					info.status = STATUS_START;
+			if( !msg.result ) {
+				if( ((device_iot_config_t*)msg.arg)->sd_iot_info.plug &&
+						(((device_iot_config_t*)msg.arg)->sd_iot_info.freeBytes * 1024 > MIN_SD_SIZE_IN_MB) ) {
+					if( info.status == STATUS_WAIT ) {
+						misc_set_bit( &info.thread_exit, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
+					}
+					else if( info.status == STATUS_IDLE )
+						info.status = STATUS_START;
+				}
+				else {
+					if( info.status == STATUS_RUN ) {
+						recorder_quit_all(-1);
+						info.status = STATUS_WAIT;
+					}
+				}
 			}
-*/
+			break;
+		case MSG_RECORDER_CTRL_DIRECT:
+			recorder_process_direct_ctrl(&msg);
+			break;
+		case MSG_RECORDER_GET_PARA:
+			ret = recorder_get_iot_config(&tmp);
+			send_iot_ack(&msg, &send_msg, MSG_RECORDER_GET_PARA, msg.receiver, ret,
+					&tmp, sizeof(recorder_iot_config_t));
+			break;
+		case MSG_MIIO_TIME_SYNCHRONIZED:
+			misc_set_bit( &info.thread_exit, RECORDER_INIT_CONDITION_MIIO_TIME, 1);
+			break;
+		default:
+			log_err("not processed message = %d", msg.message);
 			break;
 	}
 	msg_free(&msg);
@@ -786,6 +929,7 @@ static void task_error(void)
 	usleep(1000);
 	return;
 }
+
 /*
  * default task: none->run
  */
@@ -795,34 +939,36 @@ static void task_default(void)
 	int ret = 0;
 	switch( info.status){
 		case STATUS_NONE:
-		    /********message body********/
-			msg_init(&msg);
-			msg.message = MSG_CONFIG_READ;
-			msg.sender = msg.receiver = SERVER_RECORDER;
-			ret = server_config_message(&msg);
-			/***************************/
-			if( !ret ) info.status = STATUS_WAIT;
-			else sleep(1);
-			break;
-		case STATUS_WAIT:
-			if( config.status == ( (1<<CONFIG_RECORDER_MODULE_NUM) -1 ) ) {
-				info.status = STATUS_SETUP;
-				recorder_start_init_recorder_job();
+			ret = config_recorder_read(&config);
+			if( !ret && misc_full_bit(config.status, CONFIG_RECORDER_MODULE_NUM) ) {
+				misc_set_bit(&info.thread_exit, RECORDER_INIT_CONDITION_CONFIG, 1);
 			}
-			else usleep(1000);
-			break;
-		case STATUS_SETUP:
+			else {
+				info.status = STATUS_ERROR;
+				break;
+			}
 			/********message body********/
 			msg.message = MSG_DEVICE_GET_PARA;
 			msg.sender = msg.receiver = SERVER_RECORDER;
-//			ret = server_device_message(&msg);
+			msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
+			ret = server_device_message(&msg);
 			/****************************/
+			info.status = STATUS_WAIT;
+			break;
+		case STATUS_WAIT:
+			if( misc_full_bit(info.thread_exit, RECORDER_INIT_CONDITION_NUM))
+				info.status = STATUS_SETUP;
+			else usleep(1000);
+			break;
+		case STATUS_SETUP:
 			info.status = STATUS_IDLE;
 			break;
 		case STATUS_IDLE:
-			info.status = STATUS_START;
+			if( config.profile.enable )
+				info.status = STATUS_START;
 			break;
 		case STATUS_START:
+			recorder_start_init_recorder_job();
 			info.status = STATUS_RUN;
 			break;
 		case STATUS_RUN:
@@ -860,7 +1006,7 @@ static void *server_func(void)
 		heart_beat_proc();
 	}
 	if( info.exit ) {
-		while( info.thread_exit != info.thread_start ) {
+		while( info.thread_start ) {
 		}
 	    /********message body********/
 		message_t msg;
