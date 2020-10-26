@@ -127,6 +127,7 @@ static int send_message(int receiver, message_t *msg)
 	int st;
 	switch(receiver) {
 	case SERVER_DEVICE:
+		st = server_device_message(msg);
 		break;
 	case SERVER_KERNEL:
 		break;
@@ -143,9 +144,16 @@ static int send_message(int receiver, message_t *msg)
 	case SERVER_AUDIO:
 		st = server_audio_message(msg);
 		break;
+	case SERVER_VIDEO:
+		st = server_video_message(msg);
+		break;
 	case SERVER_RECORDER:
 		break;
 	case SERVER_PLAYER:
+		st = server_player_message(msg);
+		break;
+	case SERVER_SPEAKER:
+		st = server_speaker_message(msg);
 		break;
 	case SERVER_MANAGER:
 		st = manager_message(msg);
@@ -159,9 +167,13 @@ static int recorder_get_iot_config(recorder_iot_config_t *tmp)
 	int ret = 0, st;
 	memset(tmp,0,sizeof(recorder_iot_config_t));
 	st = info.status;
-	if( st <= STATUS_WAIT ) return -1;
+	if( st < STATUS_WAIT ) return -1;
 	tmp->local_save = config.profile.enable;
 	tmp->recording_mode = config.profile.mode;
+	strcpy( tmp->alarm_prefix, config.profile.alarm_prefix);
+	strcpy( tmp->motion_prefix, config.profile.motion_prefix);
+	strcpy( tmp->normal_prefix, config.profile.normal_prefix);
+	strcpy( tmp->directory, config.profile.directory);
 	return ret;
 }
 
@@ -275,6 +287,8 @@ static int recorder_func_close( recorder_job_t *ctrl )
 	char start[MAX_SYSTEM_STRING_SIZE*2];
 	char stop[MAX_SYSTEM_STRING_SIZE*2];
 	char prefix[MAX_SYSTEM_STRING_SIZE];
+	char alltime[MAX_SYSTEM_STRING_SIZE];
+	message_t msg;
 	int ret = 0;
 	if(ctrl->run.mp4_file != MP4_INVALID_FILE_HANDLE) {
 		log_info("+++MP4Close\n");
@@ -309,44 +323,59 @@ static int recorder_func_close( recorder_job_t *ctrl )
 		log_err("rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
 	}
 	else {
+	    /********message body********/
+		msg_init(&msg);
+		msg.message = MSG_RECORDER_ADD_FILE;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		memset(alltime, 0, sizeof(alltime));
+		sprintf(alltime, "%s%s", start, stop);
+		msg.arg = alltime;
+		msg.arg_size = strlen(alltime) + 1;
+		ret = recorder_send_message(SERVER_PLAYER, &msg);
+		/***************************/
 		log_info("Record file is %s\n", ctrl->run.file_path);
 	}
 	return ret;
 }
 
-static int recorder_write_mp4_video( recorder_job_t *ctrl, message_t *msg )
+static int recorder_write_mp4_video( recorder_job_t *ctrl, message_t *msg)
 {
 	unsigned char *p_data = (unsigned char*)msg->extra;
 	unsigned int data_length = msg->extra_size;
 	av_data_info_t *info = (av_data_info_t*)(msg->arg);
 	nalu_unit_t nalu;
+	int ret;
+	int			frame_len;
+	MP4Duration duration, offset;
 	memset(&nalu, 0, sizeof(nalu_unit_t));
 	int pos = 0, len = 0;
 	while ( (len = h264_read_nalu(p_data, data_length, pos, &nalu)) != 0) {
 		switch ( nalu.type) {
 			case 0x07:
-				if ( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
+				if ( !ctrl->run.sps_read ) {
 					ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000,
-							90000 / info->fps,
+							MP4_INVALID_DURATION /*90000 / info->fps*/,
 							info->width,
 							info->height,
 							nalu.data[1], nalu.data[2], nalu.data[3], 3);
-//					ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000, 90000/15, 800, 600,0x4d, 0x40, 0x1f, 3);
-					if( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
-						return -1;
-					}
-					MP4SetVideoProfileLevel( ctrl->run.mp4_file, 0x7F);
-					MP4AddH264SequenceParameterSet( ctrl->run.mp4_file, ctrl->run.video_track, nalu.data, nalu.size);
+	//					ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000, 90000/15, 800, 600,0x4d, 0x40, 0x1f, 3);
+						if( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
+							return -1;
+						}
+						ctrl->run.sps_read = 1;
+						MP4SetVideoProfileLevel( ctrl->run.mp4_file, 0x7F);
+						MP4AddH264SequenceParameterSet( ctrl->run.mp4_file, ctrl->run.video_track, nalu.data, nalu.size);
 					}
 					break;
 			case 0x08:
-				if ( ctrl->run.video_track == MP4_INVALID_TRACK_ID)
-					break;
+				if ( ctrl->run.pps_read ) break;
+				if ( !ctrl->run.sps_read ) break;
+				ctrl->run.pps_read = 1;
 				MP4AddH264PictureParameterSet(ctrl->run.mp4_file, ctrl->run.video_track, nalu.data, nalu.size);
 				break;
 			case 0x1:
 			case 0x5:
-				if ( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
+				if ( !ctrl->run.sps_read || !ctrl->run.pps_read ) {
 					return -1;
 				}
 				int nlength = nalu.size + 4;
@@ -360,10 +389,35 @@ static int recorder_write_mp4_video( recorder_job_t *ctrl, message_t *msg )
 				data[2] = nalu.size >> 8;
 				data[3] = nalu.size & 0xff;
 				memcpy(data + 4, nalu.data, nalu.size);
-				if (!MP4WriteSample(ctrl->run.mp4_file, ctrl->run.video_track, data, nlength, MP4_INVALID_DURATION, 0, 1)) {
+				int key = (nalu.type == 0x5?1:0);
+				if( !key && !ctrl->run.first_frame ) {
+					free(data);
+					return -1;
+				}
+				if( ctrl->run.first_frame ) {
+					duration 	= ( info->timestamp - ctrl->run.last_vframe_stamp) * 90000 /1000;
+					offset 		= ( info->timestamp - ctrl->run.first_frame_stamp) * 90000 / 1000;
+				}
+				else {
+					duration	= 90000 / info->fps;
+					offset		= 0;
+				}
+				ret = MP4WriteSample(ctrl->run.mp4_file, ctrl->run.video_track, data, nlength,
+						duration, 0, key);
+				if( !ret ) {
 				  free(data);
 				  return -1;
 				}
+				if( !ctrl->run.first_frame && key) {
+					ctrl->run.real_start = time_get_now_stamp();
+					ctrl->run.fps = info->fps;
+					ctrl->run.width = info->width;
+					ctrl->run.height = info->height;
+					ctrl->run.first_frame_stamp = info->timestamp;
+					ctrl->run.first_frame = 1;
+				}
+				ctrl->run.last_write = time_get_now_stamp();
+				ctrl->run.last_vframe_stamp = info->timestamp;
 				free(data);
 			break;
 			  default :
@@ -397,13 +451,15 @@ static int recorder_func_init_mp4v2( recorder_job_t *ctrl)
 	}
 	MP4SetTimeScale( ctrl->run.mp4_file, 90000);
 	if( ctrl->init.audio ) {
-		ctrl->run.audio_track = MP4AddALawAudioTrack( ctrl->run.mp4_file, ctrl->config.profile.quality[ctrl->init.quality].audio_sample);
+		ctrl->run.audio_track = MP4AddALawAudioTrack( ctrl->run.mp4_file,
+				ctrl->config.profile.quality[ctrl->init.quality].audio_sample);
 		if ( ctrl->run.audio_track == MP4_INVALID_TRACK_ID) {
 			printf("add audio track failed.\n");
 			return -1;
 		}
 		MP4SetTrackIntegerProperty( ctrl->run.mp4_file, ctrl->run.audio_track, "mdia.minf.stbl.stsd.alaw.channels", 1);
-		MP4SetTrackIntegerProperty( ctrl->run.mp4_file, ctrl->run.audio_track, "mdia.minf.stbl.stsd.alaw.sampleSize", 8);
+		MP4SetTrackIntegerProperty( ctrl->run.mp4_file, ctrl->run.audio_track, "mdia.minf.stbl.stsd.alaw.sampleSize", 16);
+	    MP4SetAudioProfileLevel(ctrl->run.mp4_file, 0x02);
 	}
 	memset( ctrl->run.file_path, 0, sizeof(ctrl->run.file_path));
 	strcpy(ctrl->run.file_path, fname);
@@ -427,11 +483,11 @@ static int recorder_func_pause( recorder_job_t *ctrl)
 		return 0;
 	}
 	else {
-		temp1 = ctrl->run.start;
-		temp2 = ctrl->run.stop;
+		temp1 = ctrl->run.real_stop;
+		temp2 = ctrl->run.stop - ctrl->run.start;
 		memset( &ctrl->run, 0, sizeof( recorder_run_t));
-		ctrl->run.start = temp2 + ctrl->init.repeat_interval;
-		ctrl->run.stop = ctrl->run.start + (temp2 - temp1);
+		ctrl->run.start = temp1 + ctrl->init.repeat_interval;
+		ctrl->run.stop = ctrl->run.start + temp2;
 		ctrl->status = RECORDER_THREAD_STARTED;
 		log_info("-------------add recursive recorder---------------------");
 		log_info("now=%ld", time_get_now_stamp());
@@ -451,7 +507,7 @@ static int recorder_func_run( recorder_job_t *ctrl)
 	int 			ret_video = 1, 	ret_audio = 1, ret;
 	av_data_info_t *info;
 	unsigned char	*p;
-	char			flag;
+	MP4Duration duration, offset;
     //read video frame
 	ret = pthread_rwlock_wrlock(&video_buff.lock);
 	if(ret)	{
@@ -491,50 +547,42 @@ static int recorder_func_run( recorder_job_t *ctrl)
 	if ( !ret_audio ) {
 		info = (av_data_info_t*)(amsg.arg);
 		p = (unsigned char*)amsg.extra;
-		if( !MP4WriteSample( ctrl->run.mp4_file, ctrl->run.audio_track, p, amsg.extra_size , 320, 0, 1) ) {
-			log_err("MP4WriteSample audio failed.\n");
-			ret = ERR_NO_DATA;
+		if( ctrl->run.first_frame ) {
+			if( ctrl->run.first_audio ) {
+				duration 	= ( info->timestamp - ctrl->run.last_aframe_stamp) * 90000 /1000;
+				offset 		= ( info->timestamp - ctrl->run.first_frame_stamp) * 90000 / 1000;
+			}
+			else {
+				duration	= 32 * 90000 / 1000;	//8k mono channel
+				offset		= 0;
+				ctrl->run.first_audio = 1;
+			}
+			if( !MP4WriteSample( ctrl->run.mp4_file, ctrl->run.audio_track, p, amsg.extra_size ,
+					256, 0, 1) ) {
+				log_err("MP4WriteSample audio failed.\n");
+				ret = ERR_NO_DATA;
+			}
+			ctrl->run.last_aframe_stamp = info->timestamp;
 		}
-		ctrl->run.last_write = time_get_now_stamp();
 	}
 	if( !ret_video ) {
 		info = (av_data_info_t*)(vmsg.arg);
-		p = (unsigned char*)vmsg.extra;
-		flag = p[4];
-		if( !ctrl->run.i_frame_read ) {
-			if( flag != 0x41  ) {
-				ctrl->run.i_frame_read = 1;
-				ctrl->run.real_start = time_get_now_stamp();
-				ctrl->run.fps = info->fps;
-				ctrl->run.width = info->width;
-				ctrl->run.height = info->height;
-			}
-			else {
-				ret = ERR_NO_DATA;
-				goto exit;
-			}
-		}
-/*		if( flag==0x41 ) {
-			ret = ERR_NO_DATA;
-			goto exit;
-		}*/
-		if( info->fps != ctrl->run.fps) {
+		if( ctrl->run.first_frame && info->fps != ctrl->run.fps) {
 			log_err("the video fps has changed, stop recording!");
 			ret = ERR_ERROR;
 			goto close_exit;
 		}
-		if( info->width != ctrl->run.width || info->height != ctrl->run.height ) {
+		if(  ctrl->run.first_frame && (info->width != ctrl->run.width || info->height != ctrl->run.height) ) {
 			log_err("the video dimention has changed, stop recording!");
 			ret = ERR_ERROR;
 			goto close_exit;
 		}
-		ret = recorder_write_mp4_video( ctrl, &vmsg );
+		ret = recorder_write_mp4_video( ctrl, &vmsg);
 		if(ret < 0) {
 			log_err("MP4WriteSample video failed.\n");
 			ret = ERR_NO_DATA;
 			goto exit;
 		}
-		ctrl->run.last_write = time_get_now_stamp();
 		if( recorder_check_finish(ctrl) ) {
 			log_info("------------stop=%d------------", time_get_now_stamp());
 			log_info("recording finished!");
@@ -549,10 +597,7 @@ exit:
     return ret;
 close_exit:
 	ret = recorder_func_close(ctrl);
-	if( !ret )
-		ctrl->status = RECORDER_THREAD_PAUSE;
-	else
-		ctrl->status = RECORDER_THREAD_PAUSE;
+	ctrl->status = RECORDER_THREAD_PAUSE;
 	if( !ret_video )
 		msg_free(&vmsg);
     if( !ret_audio )
@@ -675,6 +720,7 @@ static int recorder_send_message(int receiver, message_t *msg)
 	case SERVER_RECORDER:
 		break;
 	case SERVER_PLAYER:
+		st = server_player_message(msg);
 		break;
 	case SERVER_MANAGER:
 		st = manager_message(msg);
@@ -850,7 +896,7 @@ static int server_message_proc(void)
 			if( !msg.result ) {
 				if( ((device_iot_config_t*)msg.arg)->sd_iot_info.plug &&
 						(((device_iot_config_t*)msg.arg)->sd_iot_info.freeBytes * 1024 > MIN_SD_SIZE_IN_MB) ) {
-					if( info.status == STATUS_WAIT ) {
+					if( info.status <= STATUS_WAIT ) {
 						misc_set_bit( &info.thread_exit, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
 					}
 					else if( info.status == STATUS_IDLE )
@@ -897,6 +943,7 @@ static int heart_beat_proc(void)
 		msg.sender = msg.receiver = SERVER_RECORDER;
 		msg.arg_in.cat = info.status;
 		msg.arg_in.dog = info.thread_start;
+		msg.arg_in.duck = info.thread_exit;
 		ret = manager_message(&msg);
 		/***************************/
 	}
@@ -939,26 +986,33 @@ static void task_default(void)
 	int ret = 0;
 	switch( info.status){
 		case STATUS_NONE:
-			ret = config_recorder_read(&config);
-			if( !ret && misc_full_bit(config.status, CONFIG_RECORDER_MODULE_NUM) ) {
-				misc_set_bit(&info.thread_exit, RECORDER_INIT_CONDITION_CONFIG, 1);
+			if( !misc_get_bit( info.thread_exit, RECORDER_INIT_CONDITION_CONFIG ) ) {
+				ret = config_recorder_read(&config);
+				if( !ret && misc_full_bit(config.status, CONFIG_RECORDER_MODULE_NUM) ) {
+					misc_set_bit(&info.thread_exit, RECORDER_INIT_CONDITION_CONFIG, 1);
+				}
+				else {
+					info.status = STATUS_ERROR;
+					break;
+				}
 			}
-			else {
-				info.status = STATUS_ERROR;
+			if( !misc_get_bit( info.thread_exit, RECORDER_INIT_CONDITION_DEVICE_CONFIG) ) {
+				/********message body********/
+				msg.message = MSG_DEVICE_GET_PARA;
+				msg.sender = msg.receiver = SERVER_RECORDER;
+				msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
+				ret = server_device_message(&msg);
+				/****************************/
+				sleep(1);
 				break;
 			}
-			/********message body********/
-			msg.message = MSG_DEVICE_GET_PARA;
-			msg.sender = msg.receiver = SERVER_RECORDER;
-			msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
-			ret = server_device_message(&msg);
-			/****************************/
-			info.status = STATUS_WAIT;
+			if( misc_full_bit( info.thread_exit, RECORDER_INIT_CONDITION_NUM ) )
+				info.status = STATUS_WAIT;
+			else
+				usleep(100000);
 			break;
 		case STATUS_WAIT:
-			if( misc_full_bit(info.thread_exit, RECORDER_INIT_CONDITION_NUM))
-				info.status = STATUS_SETUP;
-			else usleep(1000);
+			info.status = STATUS_SETUP;
 			break;
 		case STATUS_SETUP:
 			info.status = STATUS_IDLE;

@@ -20,7 +20,7 @@
 /*
  * define
  */
-#define		SERVER_RECORDER_VERSION_STRING		"alpha-3.3"
+#define		SERVER_RECORDER_VERSION_STRING		"alpha-3.4"
 
 #define		MSG_RECORDER_BASE						(SERVER_RECORDER<<16)
 #define		MSG_RECORDER_SIGINT						MSG_RECORDER_BASE | 0x0000
@@ -39,6 +39,8 @@
 #define		MSG_RECORDER_ADD_ACK					MSG_RECORDER_BASE | 0x1015
 #define		MSG_RECORDER_VIDEO_DATA					MSG_RECORDER_BASE | 0x0100
 #define		MSG_RECORDER_AUDIO_DATA					MSG_RECORDER_BASE | 0x0101
+#define		MSG_RECORDER_ADD_FILE					MSG_RECORDER_BASE | 0x0102
+
 
 #define		RECORDER_AUDIO_YES						0x00
 #define		RECORDER_AUDIO_NO						0x01
@@ -96,7 +98,13 @@ typedef struct recorder_run_t {
 	unsigned long long 	real_start;
 	unsigned long long 	real_stop;
 	unsigned long long	last_write;
-	char				i_frame_read;
+	unsigned long long	last_vframe_stamp;
+	unsigned long long	last_aframe_stamp;
+	unsigned long long 	first_frame_stamp;
+	char				first_audio;
+	char				sps_read;
+	char				pps_read;
+	char				first_frame;
     int					fps;
     int					width;
     int					height;
@@ -114,6 +122,10 @@ typedef struct recorder_job_t {
 typedef struct recorder_iot_config_t {
 	int 	local_save;
 	int		recording_mode;
+	char	directory[MAX_SYSTEM_STRING_SIZE];
+	char	normal_prefix[MAX_SYSTEM_STRING_SIZE];
+	char	motion_prefix[MAX_SYSTEM_STRING_SIZE];
+	char	alarm_prefix[MAX_SYSTEM_STRING_SIZE];
 } recorder_iot_config_t;
 
 /*
