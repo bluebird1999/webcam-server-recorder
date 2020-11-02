@@ -20,27 +20,25 @@
 /*
  * define
  */
-#define		SERVER_RECORDER_VERSION_STRING		"alpha-3.4"
+#define		SERVER_RECORDER_VERSION_STRING		"alpha-3.5"
 
 #define		MSG_RECORDER_BASE						(SERVER_RECORDER<<16)
-#define		MSG_RECORDER_SIGINT						MSG_RECORDER_BASE | 0x0000
-#define		MSG_RECORDER_SIGINT_ACK					MSG_RECORDER_BASE | 0x1000
-#define		MSG_RECORDER_START						MSG_RECORDER_BASE | 0x0010
-#define		MSG_RECORDER_START_ACK					MSG_RECORDER_BASE | 0x1010
-#define		MSG_RECORDER_STOP						MSG_RECORDER_BASE | 0x0011
-#define		MSG_RECORDER_STOP_ACK					MSG_RECORDER_BASE | 0x1011
-#define		MSG_RECORDER_GET_PARA					MSG_RECORDER_BASE | 0x0012
-#define		MSG_RECORDER_GET_PARA_ACK				MSG_RECORDER_BASE | 0x1012
-#define		MSG_RECORDER_SET_PARA					MSG_RECORDER_BASE | 0x0013
-#define		MSG_RECORDER_SET_PARA_ACK				MSG_RECORDER_BASE | 0x1013
-#define		MSG_RECORDER_CTRL_DIRECT				MSG_RECORDER_BASE | 0x0014
-#define		MSG_RECORDER_CTRL_DIRECT_ACK			MSG_RECORDER_BASE | 0x1014
-#define		MSG_RECORDER_ADD						MSG_RECORDER_BASE | 0x0015
-#define		MSG_RECORDER_ADD_ACK					MSG_RECORDER_BASE | 0x1015
-#define		MSG_RECORDER_VIDEO_DATA					MSG_RECORDER_BASE | 0x0100
-#define		MSG_RECORDER_AUDIO_DATA					MSG_RECORDER_BASE | 0x0101
-#define		MSG_RECORDER_ADD_FILE					MSG_RECORDER_BASE | 0x0102
-
+#define		MSG_RECORDER_SIGINT						(MSG_RECORDER_BASE | 0x0000)
+#define		MSG_RECORDER_SIGINT_ACK					(MSG_RECORDER_BASE | 0x1000)
+#define		MSG_RECORDER_START						(MSG_RECORDER_BASE | 0x0010)
+#define		MSG_RECORDER_START_ACK					(MSG_RECORDER_BASE | 0x1010)
+#define		MSG_RECORDER_STOP						(MSG_RECORDER_BASE | 0x0011)
+#define		MSG_RECORDER_STOP_ACK					(MSG_RECORDER_BASE | 0x1011)
+#define		MSG_RECORDER_PROPERTY_GET				(MSG_RECORDER_BASE | 0x0012)
+#define		MSG_RECORDER_PROPERTY_GET_ACK			(MSG_RECORDER_BASE | 0x1012)
+#define		MSG_RECORDER_PROPERTY_SET				(MSG_RECORDER_BASE | 0x0013)
+#define		MSG_RECORDER_PROPERTY_SET_ACK			(MSG_RECORDER_BASE | 0x1013)
+#define		MSG_RECORDER_PROPERTY_NOTIFY			(MSG_RECORDER_BASE | 0x0014)
+#define		MSG_RECORDER_ADD						(MSG_RECORDER_BASE | 0x0015)
+#define		MSG_RECORDER_ADD_ACK					(MSG_RECORDER_BASE | 0x1015)
+#define		MSG_RECORDER_VIDEO_DATA					(MSG_RECORDER_BASE | 0x0100)
+#define		MSG_RECORDER_AUDIO_DATA					(MSG_RECORDER_BASE | 0x0101)
+#define		MSG_RECORDER_ADD_FILE					(MSG_RECORDER_BASE | 0x0102)
 
 #define		RECORDER_AUDIO_YES						0x00
 #define		RECORDER_AUDIO_NO						0x01
@@ -58,9 +56,12 @@
 
 #define		MAX_RECORDER_JOB						3
 
-//control command
-#define		RECORDER_CTRL_LOCAL_SAVE				0x0000
-#define		RECORDER_CTRL_RECORDING_MODE			0x0001
+#define		RECORDER_PROPERTY_SERVER_STATUS				(0x000 | PROPERTY_TYPE_GET)
+#define		RECORDER_PROPERTY_CONFIG_STATUS				(0x001 | PROPERTY_TYPE_GET)
+#define		RECORDER_PROPERTY_SAVE_MODE					(0x002 | PROPERTY_TYPE_GET | PROPERTY_TYPE_SET)
+#define		RECORDER_PROPERTY_RECORDING_MODE			(0x003 | PROPERTY_TYPE_GET | PROPERTY_TYPE_SET)
+#define		RECORDER_PROPERTY_NORMAL_DIRECTORY			(0x004 | PROPERTY_TYPE_GET)
+
 /*
  * structure
  */
@@ -80,6 +81,7 @@ typedef struct recorder_init_t {
 	int		repeat_interval;
     int		audio;
     int		quality;
+    int		video_channel;
     char   	start[MAX_SYSTEM_STRING_SIZE];
     char   	stop[MAX_SYSTEM_STRING_SIZE];
     HANDLER	func;
@@ -88,7 +90,6 @@ typedef struct recorder_init_t {
 typedef struct recorder_run_t {
 	char   				file_path[MAX_SYSTEM_STRING_SIZE*2];
 	pthread_rwlock_t 	lock;
-	pthread_t 			pid;
 	MP4FileHandle 		mp4_file;
 	MP4TrackId 			video_track;
 	MP4TrackId 			audio_track;
@@ -118,16 +119,6 @@ typedef struct recorder_job_t {
 	recorder_run_t		run;
 	recorder_config_t 	config;
 } recorder_job_t;
-
-typedef struct recorder_iot_config_t {
-	int 	local_save;
-	int		recording_mode;
-	char	directory[MAX_SYSTEM_STRING_SIZE];
-	char	normal_prefix[MAX_SYSTEM_STRING_SIZE];
-	char	motion_prefix[MAX_SYSTEM_STRING_SIZE];
-	char	alarm_prefix[MAX_SYSTEM_STRING_SIZE];
-} recorder_iot_config_t;
-
 /*
  * function
  */
