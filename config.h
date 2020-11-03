@@ -18,7 +18,7 @@
 #define		CONFIG_RECORDER_MODULE_NUM			1
 #define		CONFIG_RECORDER_PROFILE				0
 
-#define 	CONFIG_RECORDER_PROFILE_PATH				"/opt/qcy/config/recorder_profile.config"
+#define 	CONFIG_RECORDER_PROFILE_PATH				"config/recorder_profile.config"
 
 /*
  * structure

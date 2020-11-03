@@ -19,7 +19,6 @@
 #include <rtsavapi.h>
 #include <rtsvideo.h>
 #include <malloc.h>
-#include <dmalloc.h>
 //program header
 #include "../../manager/manager_interface.h"
 #include "../../server/realtek/realtek_interface.h"
@@ -132,7 +131,7 @@ static int send_message(int receiver, message_t *msg)
 			st = manager_message(msg);
 			break;
 		default:
-			log_err("unknown message target! %d", receiver);
+			log_qcy(DEBUG_SERIOUS, "unknown message target! %d", receiver);
 			break;
 	}
 	return st;
@@ -144,7 +143,7 @@ static int recorder_quit_all(int id)
 	int i;
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	for( i=0; i<MAX_RECORDER_JOB; i++ ) {
@@ -153,7 +152,7 @@ static int recorder_quit_all(int id)
 	}
 	ret = pthread_rwlock_unlock(&info.lock);
 	if (ret) {
-		log_err("add message unlock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret);
 	}
 	return ret;
 }
@@ -220,7 +219,7 @@ static int recorder_set_property(message_t *msg)
 				info.status = STATUS_WAIT;
 			}
 			config.profile.enable = temp;
-			log_info("changed the enable = %d", config.profile.enable);
+			log_qcy(DEBUG_SERIOUS, "changed the enable = %d", config.profile.enable);
 			config_recorder_set(CONFIG_RECORDER_PROFILE, &config.profile);
 			send_msg.result = 0;
 		}
@@ -229,7 +228,7 @@ static int recorder_set_property(message_t *msg)
 		int temp = *((int*)(msg->arg));
 		if( temp != config.profile.mode) {
 			config.profile.mode = temp;
-			log_info("changed the mode = %d", config.profile.mode);
+			log_qcy(DEBUG_SERIOUS, "changed the mode = %d", config.profile.mode);
 			config_recorder_set(CONFIG_RECORDER_PROFILE, &config.profile);
 		    /********message body********/
 			message_t msg;
@@ -276,7 +275,7 @@ static int recorder_start_init_recorder_job(void)
 static int recorder_thread_error( recorder_job_t *ctrl )
 {
 	int ret = 0;
-	log_err("errors in this recorder thread, stop!");
+	log_qcy(DEBUG_SERIOUS, "errors in this recorder thread, stop!");
 	ctrl->run.exit = 1;
 	return ret;
 }
@@ -294,12 +293,12 @@ static int recorder_thread_start_stream( recorder_job_t *ctrl )
 	msg.sender = msg.receiver = SERVER_RECORDER;
 	if( ctrl->init.video_channel == 0) {
 	    if( server_video_message(&msg)!=0 ) {
-	    	log_err("video start failed from recorder!");
+	    	log_qcy(DEBUG_SERIOUS, "video start failed from recorder!");
 	    }
 	}
 	else if( ctrl->init.video_channel == 1) {
 	    if( server_video2_message(&msg)!=0 ) {
-	    	log_err("video2 start failed from recorder!");
+	    	log_qcy(DEBUG_SERIOUS, "video2 start failed from recorder!");
 	    }
 	}
     if( ctrl->init.audio ) {
@@ -308,7 +307,7 @@ static int recorder_thread_start_stream( recorder_job_t *ctrl )
 		msg.sender = msg.receiver = SERVER_RECORDER;
 		msg.arg_in.cat = ctrl->init.type;
 		if( server_audio_message(&msg)!=0 ) {
-			log_err("audio start failed from recorder!");
+			log_qcy(DEBUG_SERIOUS, "audio start failed from recorder!");
 		}
     }
     /****************************/
@@ -327,12 +326,12 @@ static int recorder_thread_stop_stream( recorder_job_t *ctrl )
 	msg.sender = msg.receiver = SERVER_RECORDER;
 	if( ctrl->init.video_channel == 0) {
 	    if( server_video_message(&msg)!=0 ) {
-	    	log_err("video stop failed from recorder!");
+	    	log_qcy(DEBUG_SERIOUS, "video stop failed from recorder!");
 	    }
 	}
 	else if( ctrl->init.video_channel == 1) {
 	    if( server_video2_message(&msg)!=0 ) {
-	    	log_err("video2 stop failed from recorder!");
+	    	log_qcy(DEBUG_SERIOUS, "video2 stop failed from recorder!");
 	    }
 	}
     if( ctrl->init.audio ) {
@@ -341,7 +340,7 @@ static int recorder_thread_stop_stream( recorder_job_t *ctrl )
 		msg.sender = msg.receiver = SERVER_RECORDER;
 		msg.arg_in.cat = ctrl->init.type;
 		if( server_audio_message(&msg)!=0 ) {
-			log_err("audio stop failed from recorder!");
+			log_qcy(DEBUG_SERIOUS, "audio stop failed from recorder!");
 		}
     }
     /****************************/
@@ -367,14 +366,14 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	message_t msg;
 	int ret = 0;
 	if(ctrl->run.mp4_file != MP4_INVALID_FILE_HANDLE) {
-		log_info("+++MP4Close\n");
+		log_qcy(DEBUG_SERIOUS, "+++MP4Close\n");
 		MP4Close(ctrl->run.mp4_file, MP4_CLOSE_DO_NOT_COMPUTE_BITRATE);
 	}
 	else {
 		return -1;
 	}
 	if( (ctrl->run.last_write - ctrl->run.real_start) < ctrl->config.profile.min_length ) {
-		log_info("Recording file %s is too short, removed!", ctrl->run.file_path);
+		log_qcy(DEBUG_SERIOUS, "Recording file %s is too short, removed!", ctrl->run.file_path);
 		//remove file here.
 		remove(ctrl->run.file_path);
 		return -1;
@@ -396,7 +395,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	sprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
 	ret = rename(oldname, ctrl->run.file_path);
 	if(ret) {
-		log_err("rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
+		log_qcy(DEBUG_SERIOUS, "rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
 	}
 	else {
 	    /********message body********/
@@ -409,7 +408,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 		msg.arg_size = strlen(alltime) + 1;
 		ret = send_message(SERVER_PLAYER, &msg);
 		/***************************/
-		log_info("Record file is %s\n", ctrl->run.file_path);
+		log_qcy(DEBUG_SERIOUS, "Record file is %s\n", ctrl->run.file_path);
 	}
 	return ret;
 }
@@ -457,7 +456,7 @@ static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, message_t *msg
 				int nlength = nalu.size + 4;
 				unsigned char *data = (unsigned char *)malloc(nlength);
 				if(!data) {
-					log_err("mp4_video_frame_write malloc failed\n");
+					log_qcy(DEBUG_SERIOUS, "mp4_video_frame_write malloc failed\n");
 					return -1;
 				}
 				data[0] = nalu.size >> 24;
@@ -557,11 +556,11 @@ static int recorder_thread_pause( recorder_job_t *ctrl)
 		ctrl->run.start = temp1 + ctrl->init.repeat_interval;
 		ctrl->run.stop = ctrl->run.start + temp2;
 		ctrl->status = RECORDER_THREAD_STARTED;
-		log_info("-------------add recursive recorder---------------------");
-		log_info("now=%ld", time_get_now_stamp());
-		log_info("start=%ld", ctrl->run.start);
-		log_info("end=%ld", ctrl->run.stop);
-		log_info("--------------------------------------------------");
+		log_qcy(DEBUG_SERIOUS, "-------------add recursive recorder---------------------");
+		log_qcy(DEBUG_SERIOUS, "now=%ld", time_get_now_stamp());
+		log_qcy(DEBUG_SERIOUS, "start=%ld", ctrl->run.start);
+		log_qcy(DEBUG_SERIOUS, "end=%ld", ctrl->run.stop);
+		log_qcy(DEBUG_SERIOUS, "--------------------------------------------------");
 	}
 	if( time_get_now_stamp() < (ctrl->run.start - MAX_BETWEEN_RECODER_PAUSE) ) {
 		recorder_thread_check_and_exit_stream(ctrl);
@@ -579,14 +578,14 @@ static int recorder_thread_run( recorder_job_t *ctrl)
     //read video frame
 	ret = pthread_rwlock_wrlock(&video_buff[ctrl->t_id].lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ERR_LOCK;
 	}
 	msg_init(&vmsg);
 	ret_video = msg_buffer_pop(&video_buff[ctrl->t_id], &vmsg);
 	ret = pthread_rwlock_unlock(&video_buff[ctrl->t_id].lock);
 	if (ret) {
-		log_err("add message unlock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret);
 		ret = ERR_LOCK;
 		goto exit;
 	}
@@ -594,7 +593,7 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	if( ctrl->init.audio ) {
 		ret = pthread_rwlock_wrlock(&audio_buff[ctrl->t_id].lock);
 		if(ret)	{
-			log_err("add message lock fail, ret = %d\n", ret);
+			log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 			ret = ERR_LOCK;
 			goto exit;
 		}
@@ -602,7 +601,7 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 		ret_audio = msg_buffer_pop(&audio_buff[ctrl->t_id], &amsg);
 		ret = pthread_rwlock_unlock(&audio_buff[ctrl->t_id].lock);
 		if (ret) {
-			log_err("add message unlock fail, ret = %d\n", ret);
+			log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret);
 			ret = ERR_LOCK;
 			goto exit;
 		}
@@ -627,7 +626,7 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 			}
 			if( !MP4WriteSample( ctrl->run.mp4_file, ctrl->run.audio_track, p, amsg.extra_size ,
 					256, 0, 1) ) {
-				log_err("MP4WriteSample audio failed.\n");
+				log_qcy(DEBUG_SERIOUS, "MP4WriteSample audio failed.\n");
 				ret = ERR_NO_DATA;
 			}
 			ctrl->run.last_aframe_stamp = info->timestamp;
@@ -636,24 +635,24 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	if( !ret_video ) {
 		info = (av_data_info_t*)(vmsg.arg);
 		if( ctrl->run.first_frame && info->fps != ctrl->run.fps) {
-			log_err("the video fps has changed, stop recording!");
+			log_qcy(DEBUG_SERIOUS, "the video fps has changed, stop recording!");
 			ret = ERR_ERROR;
 			goto close_exit;
 		}
 		if(  ctrl->run.first_frame && (info->width != ctrl->run.width || info->height != ctrl->run.height) ) {
-			log_err("the video dimention has changed, stop recording!");
+			log_qcy(DEBUG_SERIOUS, "the video dimention has changed, stop recording!");
 			ret = ERR_ERROR;
 			goto close_exit;
 		}
 		ret = recorder_thread_write_mp4_video( ctrl, &vmsg);
 		if(ret < 0) {
-			log_err("MP4WriteSample video failed.\n");
+			log_qcy(DEBUG_SERIOUS, "MP4WriteSample video failed.\n");
 			ret = ERR_NO_DATA;
 			goto exit;
 		}
 		if( recorder_thread_check_finish(ctrl) ) {
-			log_info("------------stop=%d------------", time_get_now_stamp());
-			log_info("recording finished!");
+			log_qcy(DEBUG_SERIOUS, "------------stop=%d------------", time_get_now_stamp());
+			log_qcy(DEBUG_SERIOUS, "recording finished!");
 			goto close_exit;
 		}
 	}
@@ -677,10 +676,10 @@ static int recorder_thread_started( recorder_job_t *ctrl )
 {
 	int ret;
 	if( time_get_now_stamp() >= ctrl->run.start ) {
-		log_info("------------start=%ld------------", time_get_now_stamp());
+		log_qcy(DEBUG_SERIOUS, "------------start=%ld------------", time_get_now_stamp());
 		ret = recorder_thread_init_mp4v2( ctrl );
 		if( ret ) {
-			log_err("init mp4v2 failed!");
+			log_qcy(DEBUG_SERIOUS, "init mp4v2 failed!");
 			ctrl->status = RECORDER_THREAD_ERROR;
 		}
 		else {
@@ -698,7 +697,7 @@ static int server_set_status(int type, int st, int value)
 	int ret=-1;
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if(ret)	{
-		log_err("add lock fail, ret = %d", ret);
+		log_qcy(DEBUG_SERIOUS, "add lock fail, ret = %d", ret);
 		return ret;
 	}
 	if(type == STATUS_TYPE_STATUS)
@@ -713,7 +712,7 @@ static int server_set_status(int type, int st, int value)
 		misc_set_bit(&info.status2, st, value);
 	ret = pthread_rwlock_unlock(&info.lock);
 	if (ret)
-		log_err("add unlock fail, ret = %d", ret);
+		log_qcy(DEBUG_SERIOUS, "add unlock fail, ret = %d", ret);
 	return ret;
 }
 
@@ -739,12 +738,12 @@ static int *recorder_func(void *arg)
 	if( (ctrl.run.stop - ctrl.run.start) < ctrl.config.profile.min_length ||
 			(ctrl.run.stop - ctrl.run.start) > ctrl.config.profile.max_length )
 		ctrl.run.stop = ctrl.run.start + ctrl.config.profile.max_length;
-	log_info("-------------add new recorder---------------------");
-	log_info("now=%ld", time_get_now_stamp());
-	log_info("start=%ld", ctrl.run.start);
-	log_info("end=%ld", ctrl.run.stop);
-	log_info("video channel=%d", ctrl.init.video_channel);
-	log_info("--------------------------------------------------");
+	log_qcy(DEBUG_SERIOUS, "-------------add new recorder---------------------");
+	log_qcy(DEBUG_SERIOUS, "now=%ld", time_get_now_stamp());
+	log_qcy(DEBUG_SERIOUS, "start=%ld", ctrl.run.start);
+	log_qcy(DEBUG_SERIOUS, "end=%ld", ctrl.run.stop);
+	log_qcy(DEBUG_SERIOUS, "video channel=%d", ctrl.init.video_channel);
+	log_qcy(DEBUG_SERIOUS, "--------------------------------------------------");
     ctrl.status = RECORDER_THREAD_STARTED;
 	server_set_status( STATUS_TYPE_THREAD_START, ctrl.t_id, 1);
     while( !info.exit && !ctrl.run.exit && !misc_get_bit(info.status2, ctrl.t_id) ) {
@@ -765,7 +764,7 @@ static int *recorder_func(void *arg)
     }
     //release
     recorder_thread_destroy(&ctrl);
-    log_info("-----------thread exit: server_recorder_thread-----------");
+    log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_recorder_thread-----------");
     pthread_exit(0);
 }
 
@@ -775,7 +774,7 @@ static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl )
 	int i;
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	if( !count_job_other_live(ctrl->t_id) ) {
@@ -783,7 +782,7 @@ static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl )
 	}
 	ret1 = pthread_rwlock_unlock(&info.lock);
 	if (ret1)
-		log_err("add message unlock fail, ret = %d\n", ret1);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
 	return ret;
 }
 
@@ -797,7 +796,7 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 	}
 	ret = pthread_rwlock_wrlock(&info.lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	recorder_thread_close( ctrl );
@@ -806,7 +805,7 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 	msg_buffer_release(&audio_buff[ctrl->t_id]);
 	ret1 = pthread_rwlock_unlock(&info.lock);
 	if (ret1)
-		log_err("add message unlock fail, ret = %d\n", ret1);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
 	return ret;
 }
 
@@ -856,12 +855,12 @@ static int recorder_add_job( message_t* msg )
 			memcpy( &(jobs[i].init), msg->arg, sizeof(recorder_init_t));
 			ret = pthread_create(&pid, NULL, recorder_func, (void*)&jobs[i]);
 			if(ret != 0) {
-				log_err("recorder thread create error! ret = %d",ret);
+				log_qcy(DEBUG_SERIOUS, "recorder thread create error! ret = %d",ret);
 				jobs[i].status = RECORDER_THREAD_NONE;
 				jobs[i].t_id = -1;
 			 }
 			else {
-				log_info("recorder thread create successful!");
+				log_qcy(DEBUG_SERIOUS, "recorder thread create successful!");
 				jobs[i].status = RECORDER_THREAD_STARTED;
 			}
 			break;
@@ -909,7 +908,7 @@ static int server_message_proc(void)
 	msg_init(&msg);
 	ret = pthread_rwlock_wrlock(&message.lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	if( info.msg_lock ) {
@@ -919,7 +918,7 @@ static int server_message_proc(void)
 	ret = msg_buffer_pop(&message, &msg);
 	ret1 = pthread_rwlock_unlock(&message.lock);
 	if (ret1) {
-		log_err("add message unlock fail, ret = %d\n", ret1);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
 	}
 	if( ret == -1) {
 		msg_free(&msg);
@@ -979,7 +978,7 @@ static int server_message_proc(void)
 			}
 			break;
 		default:
-			log_err("not processed message = %d", msg.message);
+			log_qcy(DEBUG_SERIOUS, "not processed message = %d", msg.message);
 			break;
 	}
 	msg_free(&msg);
@@ -992,8 +991,8 @@ static int heart_beat_proc(void)
 	message_t msg;
 	long long int tick = 0;
 	tick = time_get_now_stamp();
-	if( (tick - info.tick) > SERVER_HEARTBEAT_INTERVAL ) {
-		info.tick = tick;
+	if( (tick - info.tick3) > SERVER_HEARTBEAT_INTERVAL ) {
+		info.tick3 = tick;
 	    /********message body********/
 		msg_init(&msg);
 		msg.message = MSG_MANAGER_HEARTBEAT;
@@ -1018,7 +1017,7 @@ static void task_error(void)
 	unsigned int tick=0;
 	switch( info.status ) {
 		case STATUS_ERROR:
-			log_err("!!!!!!!!error in recorder, restart in 5 s!");
+			log_qcy(DEBUG_SERIOUS, "!!!!!!!!error in recorder, restart in 5 s!");
 			info.tick = time_get_now_stamp();
 			info.status = STATUS_NONE;
 			break;
@@ -1030,7 +1029,7 @@ static void task_error(void)
 			}
 			break;
 		default:
-			log_err("!!!!!!!unprocessed server status in task_error = %d", info.status);
+			log_qcy(DEBUG_SERIOUS, "!!!!!!!unprocessed server status in task_error = %d", info.status);
 			break;
 	}
 	usleep(1000);
@@ -1056,7 +1055,9 @@ static void task_default(void)
 					break;
 				}
 			}
-			if( !misc_get_bit( info.thread_exit, RECORDER_INIT_CONDITION_DEVICE_CONFIG) ) {
+			if( !misc_get_bit( info.thread_exit, RECORDER_INIT_CONDITION_DEVICE_CONFIG)
+					&& ((time_get_now_stamp() - info.tick2 ) > MESSAGE_RESENT) ) {
+					info.tick2 = time_get_now_stamp();
 				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_DEVICE_GET_PARA;
@@ -1065,7 +1066,9 @@ static void task_default(void)
 				ret = server_device_message(&msg);
 				/****************************/;
 			}
-			if( !misc_get_bit( info.thread_exit, RECORDER_INIT_CONDITION_MIIO_TIME ) ) {
+			if( !misc_get_bit( info.thread_exit, RECORDER_INIT_CONDITION_MIIO_TIME )
+					&& ((time_get_now_stamp() - info.tick2 ) > MESSAGE_RESENT) ) {
+					info.tick2 = time_get_now_stamp();
 			    /********message body********/
 				msg_init(&msg);
 				msg.message = MSG_MIIO_PROPERTY_GET;
@@ -1076,8 +1079,6 @@ static void task_default(void)
 			}
 			if( misc_full_bit( info.thread_exit, RECORDER_INIT_CONDITION_NUM ) )
 				info.status = STATUS_WAIT;
-			else
-				sleep(1);
 			break;
 		case STATUS_WAIT:
 			info.status = STATUS_SETUP;
@@ -1103,10 +1104,9 @@ static void task_default(void)
 			info.task.func = task_error;
 			break;
 		default:
-			log_err("!!!!!!!unprocessed server status in task_default = %d", info.status);
+			log_qcy(DEBUG_SERIOUS, "!!!!!!!unprocessed server status in task_default = %d", info.status);
 			break;
 		}
-	usleep(1000);
 	return;
 }
 
@@ -1129,8 +1129,7 @@ static void *server_func(void)
 	while( !info.exit ) {
 		info.task.func();
 		server_message_proc();
-		if( info.status!=STATUS_ERROR )
-			heart_beat_proc();
+		heart_beat_proc();
 	}
 	if( info.exit ) {
 		while( info.thread_start ) {
@@ -1144,7 +1143,7 @@ static void *server_func(void)
 		/***************************/
 	}
 	server_release();
-	log_info("-----------thread exit: server_recorder-----------");
+	log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_recorder-----------");
 	pthread_exit(0);
 }
 
@@ -1160,11 +1159,11 @@ int server_recorder_start(void)
 	int ret=-1;
 	ret = pthread_create(&info.id, NULL, server_func, NULL);
 	if(ret != 0) {
-		log_err("recorder server create error! ret = %d",ret);
+		log_qcy(DEBUG_SERIOUS, "recorder server create error! ret = %d",ret);
 		 return ret;
 	 }
 	else {
-		log_err("recorder server create successful!");
+		log_qcy(DEBUG_SERIOUS, "recorder server create successful!");
 		return 0;
 	}
 }
@@ -1173,21 +1172,22 @@ int server_recorder_message(message_t *msg)
 {
 	int ret=0,ret1;
 	if( !message.init ) {
-		log_err("recorder server is not ready for message processing!");
+		log_qcy(DEBUG_SERIOUS, "recorder server is not ready for message processing!");
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&message.lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	ret = msg_buffer_push(&message, msg);
-	log_info("push into the recorder message queue: sender=%d, message=%x, ret=%d", msg->sender, msg->message, ret);
+	log_qcy(DEBUG_SERIOUS, "push into the recorder message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
+			message.head, message.tail);
 	if( ret!=0 )
-		log_err("message push in recorder error =%d", ret);
+		log_qcy(DEBUG_SERIOUS, "message push in recorder error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&message.lock);
 	if (ret1)
-		log_err("add message unlock fail, ret = %d\n", ret1);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
 	return ret;
 }
 
@@ -1207,25 +1207,25 @@ int server_recorder_video_message(message_t *msg)
 		}
 	}
 	if( id==-1 ) {
-		log_err("recording channel mismatch!");
+		log_qcy(DEBUG_SERIOUS, "recording channel mismatch!");
 		return -1;
 	}
 	if( (jobs[id].status != RECORDER_THREAD_STARTED) ||
 			(!video_buff[id].init) ) {
-		log_err("recorder video [ch=%d] is not ready for message processing!", id);
+		log_qcy(DEBUG_SERIOUS, "recorder video [ch=%d] is not ready for message processing!", id);
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&video_buff[id].lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	ret = msg_buffer_push(&video_buff[id], msg);
 	if( ret!=0 )
-		log_err("message push in recorder error =%d", ret);
+		log_qcy(DEBUG_SERIOUS, "message push in recorder error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&video_buff[id].lock);
 	if (ret1)
-		log_err("add message unlock fail, ret = %d\n", ret1);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
 	return ret;
 }
 
@@ -1239,24 +1239,24 @@ int server_recorder_audio_message(message_t *msg)
 		}
 	}
 	if( id==-1 ) {
-		log_err("recording channel mismatch!");
+		log_qcy(DEBUG_SERIOUS, "recording channel mismatch!");
 		return -1;
 	}
 	if( (jobs[id].status != RECORDER_THREAD_STARTED) ||
 			(!audio_buff[id].init) ) {
-		log_err("recorder audio [ch=%d] is not ready for message processing!", id);
+		log_qcy(DEBUG_SERIOUS, "recorder audio [ch=%d] is not ready for message processing!", id);
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&audio_buff[id].lock);
 	if(ret)	{
-		log_err("add message lock fail, ret = %d\n", ret);
+		log_qcy(DEBUG_SERIOUS, "add message lock fail, ret = %d\n", ret);
 		return ret;
 	}
 	ret = msg_buffer_push(&audio_buff[id], msg);
 	if( ret!=0 )
-		log_err("message push in recorder error =%d", ret);
+		log_qcy(DEBUG_SERIOUS, "message push in recorder error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&audio_buff[id].lock);
 	if (ret1)
-		log_err("add message unlock fail, ret = %d\n", ret1);
+		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
 	return ret;
 }
