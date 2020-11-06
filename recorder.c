@@ -368,6 +368,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	if(ctrl->run.mp4_file != MP4_INVALID_FILE_HANDLE) {
 		log_qcy(DEBUG_SERIOUS, "+++MP4Close\n");
 		MP4Close(ctrl->run.mp4_file, MP4_CLOSE_DO_NOT_COMPUTE_BITRATE);
+		ctrl->run.mp4_file = MP4_INVALID_FILE_HANDLE;
 	}
 	else {
 		return -1;
@@ -719,10 +720,12 @@ static int server_set_status(int type, int st, int value)
 static int *recorder_func(void *arg)
 {
 	recorder_job_t ctrl;
+	char fname[MAX_SYSTEM_STRING_SIZE];
 	memcpy(&ctrl, (recorder_job_t*)arg, sizeof(recorder_job_t));
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
-    misc_set_thread_name("server_recorder_thread");
+    sprintf(fname, "rcrth-%d-%d",ctrl.t_id,ctrl.init.video_channel);
+    misc_set_thread_name(fname);
     pthread_detach(pthread_self());
 	if( !video_buff[ctrl.t_id].init ) {
 		msg_buffer_init(&video_buff[ctrl.t_id], MSG_BUFFER_OVERFLOW_YES);
@@ -791,7 +794,7 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 	int ret=0,ret1;
 	server_set_status( STATUS_TYPE_THREAD_START, ctrl->t_id, 0);
 	server_set_status( STATUS_TYPE_STATUS2, ctrl->t_id, 0);
-	if( info.thread_start == 0) {
+	if( !count_job_other_live(ctrl->t_id) ) {
 		recorder_thread_stop_stream( ctrl );
 	}
 	ret = pthread_rwlock_wrlock(&info.lock);
@@ -812,9 +815,11 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 static int count_job_other_live(int myself)
 {
 	int i,num=0;
-	for( i=0; i<MAX_RECORDER_JOB; i++ ) {
-		if( (jobs[i].status>0) && (i!=myself) )
-			num++;
+	for( i=0; (i<MAX_RECORDER_JOB) && (i!=myself); i++ ) {
+		if( jobs[i].status>0  ) {
+			if( jobs[i].init.video_channel == jobs[myself].init.video_channel )
+				num++;
+		}
 	}
 	return num;
 }
@@ -949,7 +954,7 @@ static int server_message_proc(void)
 		case MSG_DEVICE_GET_PARA_ACK:
 			if( !msg.result ) {
 				if( ((device_iot_config_t*)msg.arg)->sd_iot_info.plug &&
-						(((device_iot_config_t*)msg.arg)->sd_iot_info.freeBytes * 1024 > MIN_SD_SIZE_IN_MB) ) {
+						( (((device_iot_config_t*)msg.arg)->sd_iot_info.freeBytes) > MIN_SD_SIZE_IN_MB) ) {
 					if( info.status <= STATUS_WAIT ) {
 						misc_set_bit( &info.thread_exit, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
 					}
@@ -978,7 +983,7 @@ static int server_message_proc(void)
 			}
 			break;
 		default:
-			log_qcy(DEBUG_SERIOUS, "not processed message = %d", msg.message);
+			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
 			break;
 	}
 	msg_free(&msg);
@@ -1163,7 +1168,7 @@ int server_recorder_start(void)
 		 return ret;
 	 }
 	else {
-		log_qcy(DEBUG_SERIOUS, "recorder server create successful!");
+		log_qcy(DEBUG_INFO, "recorder server create successful!");
 		return 0;
 	}
 }
@@ -1181,10 +1186,10 @@ int server_recorder_message(message_t *msg)
 		return ret;
 	}
 	ret = msg_buffer_push(&message, msg);
-	log_qcy(DEBUG_SERIOUS, "push into the recorder message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
+	log_qcy(DEBUG_VERBOSE, "push into the recorder message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg->sender, msg->message, ret,
 			message.head, message.tail);
 	if( ret!=0 )
-		log_qcy(DEBUG_SERIOUS, "message push in recorder error =%d", ret);
+		log_qcy(DEBUG_WARNING, "message push in recorder error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&message.lock);
 	if (ret1)
 		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
@@ -1207,12 +1212,12 @@ int server_recorder_video_message(message_t *msg)
 		}
 	}
 	if( id==-1 ) {
-		log_qcy(DEBUG_SERIOUS, "recording channel mismatch!");
+		log_qcy(DEBUG_WARNING, "recording channel mismatch!");
 		return -1;
 	}
 	if( (jobs[id].status != RECORDER_THREAD_STARTED) ||
 			(!video_buff[id].init) ) {
-		log_qcy(DEBUG_SERIOUS, "recorder video [ch=%d] is not ready for message processing!", id);
+		log_qcy(DEBUG_WARNING, "recorder video [ch=%d] is not ready for message processing!", id);
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&video_buff[id].lock);
@@ -1222,7 +1227,7 @@ int server_recorder_video_message(message_t *msg)
 	}
 	ret = msg_buffer_push(&video_buff[id], msg);
 	if( ret!=0 )
-		log_qcy(DEBUG_SERIOUS, "message push in recorder error =%d", ret);
+		log_qcy(DEBUG_WARNING, "message push in recorder error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&video_buff[id].lock);
 	if (ret1)
 		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
@@ -1244,7 +1249,7 @@ int server_recorder_audio_message(message_t *msg)
 	}
 	if( (jobs[id].status != RECORDER_THREAD_STARTED) ||
 			(!audio_buff[id].init) ) {
-		log_qcy(DEBUG_SERIOUS, "recorder audio [ch=%d] is not ready for message processing!", id);
+		log_qcy(DEBUG_INFO, "recorder audio [ch=%d] is not ready for message processing!", id);
 		return -1;
 	}
 	ret = pthread_rwlock_wrlock(&audio_buff[id].lock);
@@ -1254,7 +1259,7 @@ int server_recorder_audio_message(message_t *msg)
 	}
 	ret = msg_buffer_push(&audio_buff[id], msg);
 	if( ret!=0 )
-		log_qcy(DEBUG_SERIOUS, "message push in recorder error =%d", ret);
+		log_qcy(DEBUG_WARNING, "message push in recorder error =%d", ret);
 	ret1 = pthread_rwlock_unlock(&audio_buff[id].lock);
 	if (ret1)
 		log_qcy(DEBUG_SERIOUS, "add message unlock fail, ret = %d\n", ret1);
