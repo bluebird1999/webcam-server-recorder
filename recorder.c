@@ -366,7 +366,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	message_t msg;
 	int ret = 0;
 	if(ctrl->run.mp4_file != MP4_INVALID_FILE_HANDLE) {
-		log_qcy(DEBUG_SERIOUS, "+++MP4Close\n");
+		log_qcy(DEBUG_INFO, "+++MP4Close\n");
 		MP4Close(ctrl->run.mp4_file, MP4_CLOSE_DO_NOT_COMPUTE_BITRATE);
 		ctrl->run.mp4_file = MP4_INVALID_FILE_HANDLE;
 	}
@@ -374,7 +374,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 		return -1;
 	}
 	if( (ctrl->run.last_write - ctrl->run.real_start) < ctrl->config.profile.min_length ) {
-		log_qcy(DEBUG_SERIOUS, "Recording file %s is too short, removed!", ctrl->run.file_path);
+		log_qcy(DEBUG_WARNING, "Recording file %s is too short, removed!", ctrl->run.file_path);
 		//remove file here.
 		remove(ctrl->run.file_path);
 		return -1;
@@ -396,7 +396,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	sprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
 	ret = rename(oldname, ctrl->run.file_path);
 	if(ret) {
-		log_qcy(DEBUG_SERIOUS, "rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
+		log_qcy(DEBUG_WARNING, "rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
 	}
 	else {
 	    /********message body********/
@@ -409,7 +409,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 		msg.arg_size = strlen(alltime) + 1;
 		ret = send_message(SERVER_PLAYER, &msg);
 		/***************************/
-		log_qcy(DEBUG_SERIOUS, "Record file is %s\n", ctrl->run.file_path);
+		log_qcy(DEBUG_INFO, "Record file is %s\n", ctrl->run.file_path);
 	}
 	return ret;
 }
@@ -735,9 +735,9 @@ static int *recorder_func(void *arg)
 	}
 	pthread_rwlock_init(&ctrl.run.lock, NULL);
 	if (ctrl.init.start[0] == '0') ctrl.run.start = time_get_now_stamp();
-	else ctrl.run.start = time_date_to_stamp(ctrl.init.start);
+	else ctrl.run.start = time_date_to_stamp(ctrl.init.start);// - _config_.timezone * 3600;
 	if (ctrl.init.stop[0] == '0') ctrl.run.stop = ctrl.run.start + ctrl.config.profile.max_length;
-	else ctrl.run.stop = time_date_to_stamp( ctrl.init.stop);
+	else ctrl.run.stop = time_date_to_stamp( ctrl.init.stop);// - _config_.timezone * 3600;
 	if( (ctrl.run.stop - ctrl.run.start) < ctrl.config.profile.min_length ||
 			(ctrl.run.stop - ctrl.run.start) > ctrl.config.profile.max_length )
 		ctrl.run.stop = ctrl.run.start + ctrl.config.profile.max_length;
@@ -1138,7 +1138,9 @@ static void *server_func(void)
 	}
 	if( info.exit ) {
 		while( info.thread_start ) {
+			log_qcy(DEBUG_INFO, "---------------locked recorder---- %d", info.thread_start);
 		}
+		server_release();
 	    /********message body********/
 		message_t msg;
 		msg_init(&msg);
@@ -1147,7 +1149,6 @@ static void *server_func(void)
 		manager_message(&msg);
 		/***************************/
 	}
-	server_release();
 	log_qcy(DEBUG_SERIOUS, "-----------thread exit: server_recorder-----------");
 	pthread_exit(0);
 }
