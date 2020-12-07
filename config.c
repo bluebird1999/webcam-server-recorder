@@ -22,7 +22,6 @@
  * static
  */
 //variable
-static pthread_rwlock_t			lock;
 static int						dirty;
 static recorder_config_t		recorder_config;
 static config_map_t recorder_config_profile_map[] = {
@@ -65,11 +64,6 @@ static int recorder_config_save(void)
 	int ret = 0;
 	message_t msg;
 	char fname[MAX_SYSTEM_STRING_SIZE*2];
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy( DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
 	if( misc_get_bit(dirty, CONFIG_RECORDER_PROFILE) ) {
 		memset(fname,0,sizeof(fname));
 		sprintf(fname,"%s%s",_config_.qcy_path, CONFIG_RECORDER_PROFILE_PATH);
@@ -83,12 +77,8 @@ static int recorder_config_save(void)
 		msg.message = MSG_MANAGER_TIMER_REMOVE;
 		msg.arg_in.handler = recorder_config_save;
 		/****************************/
-		manager_message(&msg);
+		manager_common_send_message(SERVER_MANAGER, &msg);
 	}
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy( DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-
 	return ret;
 }
 
@@ -96,12 +86,6 @@ int config_recorder_read(recorder_config_t *rconfig)
 {
 	int ret,ret1=0;
 	char fname[MAX_SYSTEM_STRING_SIZE*2];
-	pthread_rwlock_init(&lock, NULL);
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy( DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
 	memset(fname,0,sizeof(fname));
 	sprintf(fname,"%s%s",_config_.qcy_path, CONFIG_RECORDER_PROFILE_PATH);
 	ret = read_config_file(&recorder_config_profile_map, fname);
@@ -110,10 +94,6 @@ int config_recorder_read(recorder_config_t *rconfig)
 	else
 		misc_set_bit(&recorder_config.status, CONFIG_RECORDER_PROFILE,0);
 	ret1 |= ret;
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy( DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-	ret1 |= ret;
 	memcpy(rconfig,&recorder_config,sizeof(recorder_config_t));
 	return ret1;
 }
@@ -121,11 +101,6 @@ int config_recorder_read(recorder_config_t *rconfig)
 int config_recorder_set(int module, void *arg)
 {
 	int ret = 0;
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy( DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
 	if(dirty==0) {
 		message_t msg;
 	    /********message body********/
@@ -137,32 +112,11 @@ int config_recorder_set(int module, void *arg)
 		msg.arg_in.duck = 0;
 		msg.arg_in.handler = &recorder_config_save;
 		/****************************/
-		manager_message(&msg);
+		manager_common_send_message(SERVER_MANAGER, &msg);
 	}
 	misc_set_bit(&dirty, module, 1);
 	if( module == CONFIG_RECORDER_PROFILE) {
 		memcpy( (recorder_profile_config_t*)(&recorder_config.profile), arg, sizeof(recorder_profile_config_t));
 	}
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy( DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
 	return ret;
-}
-
-int config_recorder_get_config_status(int module)
-{
-	int st,ret=0;
-	ret = pthread_rwlock_wrlock(&lock);
-	if(ret)	{
-		log_qcy( DEBUG_SERIOUS, "add lock fail, ret = %d\n", ret);
-		return ret;
-	}
-	if(module==-1)
-		st = recorder_config.status;
-	else
-		st = misc_get_bit(recorder_config.status, module);
-	ret = pthread_rwlock_unlock(&lock);
-	if (ret)
-		log_qcy( DEBUG_SERIOUS, "add unlock fail, ret = %d\n", ret);
-	return st;
 }

@@ -56,6 +56,5 @@ typedef struct recorder_config_t {
  */
 int config_recorder_read(recorder_config_t*);
 int config_recorder_set(int module, void *arg);
-int config_recorder_get_config_status(int module);
 
 #endif /* CONFIG_RECORDER_CONFIG_H_ */

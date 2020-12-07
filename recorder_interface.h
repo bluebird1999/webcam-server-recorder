@@ -20,7 +20,7 @@
 /*
  * define
  */
-#define		SERVER_RECORDER_VERSION_STRING		"alpha-3.9"
+#define		SERVER_RECORDER_VERSION_STRING		"alpha-4.0"
 
 #define		MSG_RECORDER_BASE						(SERVER_RECORDER<<16)
 #define		MSG_RECORDER_SIGINT						(MSG_RECORDER_BASE | 0x0000)
@@ -62,8 +62,6 @@
 #define		RECORDER_PROPERTY_RECORDING_MODE			(0x003 | PROPERTY_TYPE_GET | PROPERTY_TYPE_SET)
 #define		RECORDER_PROPERTY_NORMAL_DIRECTORY			(0x004 | PROPERTY_TYPE_GET)
 
-
-#define		UNIX_STAMP_2020_0						1577800800
 /*
  * structure
  */
@@ -91,7 +89,6 @@ typedef struct recorder_init_t {
 
 typedef struct recorder_run_t {
 	char   				file_path[MAX_SYSTEM_STRING_SIZE*2];
-	pthread_rwlock_t 	lock;
 	MP4FileHandle 		mp4_file;
 	MP4TrackId 			video_track;
 	MP4TrackId 			audio_track;
