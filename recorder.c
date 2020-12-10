@@ -32,6 +32,7 @@
 #include "../../server/audio/audio_interface.h"
 #include "../../server/device/device_interface.h"
 #include "../../server/video2/video2_interface.h"
+//#include "../../server/micloud/micloud_interface.h"
 //server header
 #include "recorder.h"
 #include "recorder_interface.h"
@@ -387,12 +388,12 @@ static int recorder_thread_check_finish( recorder_job_t *ctrl )
 
 static int recorder_thread_close( recorder_job_t *ctrl )
 {
-	char oldname[MAX_SYSTEM_STRING_SIZE*2];
-	char snapname[MAX_SYSTEM_STRING_SIZE*2];
+	char oldname[MAX_SYSTEM_STRING_SIZE*4];
+	char snapname[MAX_SYSTEM_STRING_SIZE*4];
 	char start[MAX_SYSTEM_STRING_SIZE*2];
 	char stop[MAX_SYSTEM_STRING_SIZE*2];
 	char prefix[MAX_SYSTEM_STRING_SIZE];
-	char alltime[MAX_SYSTEM_STRING_SIZE];
+	char alltime[MAX_SYSTEM_STRING_SIZE*4];
 	message_t msg;
 	int ret = 0;
 	if(ctrl->run.mp4_file != MP4_INVALID_FILE_HANDLE) {
@@ -423,27 +424,34 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	memset(prefix,0,sizeof(prefix));
 	time_stamp_to_date(ctrl->run.real_start, start);
 	time_stamp_to_date(ctrl->run.last_write, stop);
-	if( ctrl->init.type == RECORDER_TYPE_NORMAL)
+	if( ctrl->init.type == RECORDER_TYPE_NORMAL) {
 		strcpy( &prefix, ctrl->config.profile.normal_prefix);
-	else if( ctrl->init.type == RECORDER_TYPE_MOTION_DETECTION)
+		sprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
+		ret = rename(oldname, ctrl->run.file_path);
+	}
+	else if( ctrl->init.type == RECORDER_TYPE_MOTION_DETECTION) {
 		strcpy( &prefix, ctrl->config.profile.motion_prefix);
-	else if( ctrl->init.type == RECORDER_TYPE_ALARM)
+		sprintf( ctrl->run.file_path, "%s.mp4", oldname);
+		ret = rename(oldname, ctrl->run.file_path);
+	}
+	else if( ctrl->init.type == RECORDER_TYPE_ALARM) {
 		strcpy( &prefix, ctrl->config.profile.alarm_prefix);
-	sprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
-	ret = rename(oldname, ctrl->run.file_path);
+	}
 	if(ret) {
 		log_qcy(DEBUG_WARNING, "rename recording file %s to %s failed.\n", oldname, ctrl->run.file_path);
 	}
 	else {
-	    /********message body********/
-		msg_init(&msg);
-		msg.message = MSG_RECORDER_ADD_FILE;
-		msg.sender = msg.receiver = SERVER_RECORDER;
-		memset(alltime, 0, sizeof(alltime));
-		sprintf(alltime, "%s%s", start, stop);
-		msg.arg = alltime;
-		msg.arg_size = strlen(alltime) + 1;
-		ret = manager_common_send_message(SERVER_PLAYER, &msg);
+		if( ctrl->init.type == RECORDER_TYPE_NORMAL) {
+			/********message body********/
+			msg_init(&msg);
+			msg.message = MSG_RECORDER_ADD_FILE;
+			msg.sender = msg.receiver = SERVER_RECORDER;
+			memset(alltime, 0, sizeof(alltime));
+			sprintf(alltime, "%s%s", start, stop);
+			msg.arg = alltime;
+			msg.arg_size = strlen(alltime) + 1;
+			ret = manager_common_send_message(SERVER_PLAYER, &msg);
+		}
 		/***************************/
 		log_qcy(DEBUG_INFO, "Record file is %s\n", ctrl->run.file_path);
 	}
@@ -453,13 +461,31 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	}
 	else {
 		memset(alltime, 0, sizeof(alltime));
-		sprintf( alltime, "%s%s/%s-%s_%s.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
+		if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
+			sprintf( alltime, "%s%s/%s-%s_%s_f.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
+		}
+/*		else if( ctrl->init.type == RECORDER_TYPE_MOTION_DETECTION ) {
+			int len = strlen(snapname) - 5;
+			memcpy(alltime, snapname, len);
+			memcpy(&alltime[len], "_f.jpg", 6);
+		}
+*/
 		ret = rename(snapname, alltime);
 		if(ret) {
 			log_qcy(DEBUG_WARNING, "rename recording snapshot file %s to %s failed.\n", snapname, alltime);
 		}
 		else {
 			log_qcy(DEBUG_INFO, "Record snapshot file is %s\n", alltime);
+			/********message body********/
+			if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
+				msg_init(&msg);
+				msg.message = MSG_VIDE02_SNAPSHOT_THUMB;
+				msg.sender = msg.receiver = SERVER_RECORDER;
+				msg.arg_in.cat = ctrl->init.type;
+				msg.arg = alltime;
+				msg.arg_size = strlen(alltime) + 1;
+				ret = manager_common_send_message(SERVER_VIDEO2, &msg);
+			}
 		}
 	}
 	return ret;
@@ -601,6 +627,7 @@ static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 	msg.arg_in.dog = 1;
 	msg.arg_in.duck = 0;
 	msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
+	msg.arg_in.chick = ctrl->init.type;
 	msg.arg = fname;
 	msg.arg_size = strlen(fname) + 1;
 	if(ctrl->init.video_channel == 0) {
@@ -627,6 +654,8 @@ static int recorder_thread_pause( recorder_job_t *ctrl)
 		temp1 = ctrl->run.real_stop;
 		temp2 = ctrl->run.stop - ctrl->run.start;
 		memset( &ctrl->run, 0, sizeof( recorder_run_t));
+		if( temp1 == 0)
+			temp1 = time_get_now_stamp();
 		ctrl->run.start = temp1 + ctrl->init.repeat_interval;
 		ctrl->run.stop = ctrl->run.start + temp2;
 		ctrl->status = RECORDER_THREAD_STARTED;
