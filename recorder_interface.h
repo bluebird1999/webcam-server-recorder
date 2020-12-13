@@ -20,7 +20,7 @@
 /*
  * define
  */
-#define		SERVER_RECORDER_VERSION_STRING		"alpha-4.2"
+#define		SERVER_RECORDER_VERSION_STRING		"alpha-4.3"
 
 #define		MSG_RECORDER_BASE						(SERVER_RECORDER<<16)
 #define		MSG_RECORDER_SIGINT						(MSG_RECORDER_BASE | 0x0000)
@@ -125,5 +125,6 @@ int server_recorder_start(void);
 int server_recorder_message(message_t *msg);
 int server_recorder_video_message(message_t *msg);
 int server_recorder_audio_message(message_t *msg);
+void server_recorder_interrupt_routine(int param);
 
 #endif /* SERVER_RECORDER_RECORDER_INTERFACE_H_ */

@@ -22,6 +22,11 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <dirent.h>
+#include <sys/epoll.h>
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <linux/netlink.h>
+#include <sys/mount.h>
 //program header
 #include "../../manager/manager_interface.h"
 #include "../../server/realtek/realtek_interface.h"
@@ -53,6 +58,7 @@ static	pthread_mutex_t			mutex = PTHREAD_MUTEX_INITIALIZER;
 static	pthread_cond_t			cond = PTHREAD_COND_INITIALIZER;
 static	pthread_mutex_t			vmutex[MAX_RECORDER_JOB] = {PTHREAD_MUTEX_INITIALIZER};
 static	pthread_cond_t			vcond[MAX_RECORDER_JOB] = {PTHREAD_COND_INITIALIZER};
+static 	char					hotplug;
 
 //function
 //common
@@ -84,6 +90,7 @@ static int recorder_start_init_recorder_job(void);
 static int recorder_get_property(message_t *msg);
 static int recorder_set_property(message_t *msg);
 static int recorder_quit_all(int id);
+//static void* recorder_hotplug_func(void *arg);
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -93,6 +100,124 @@ static int recorder_quit_all(int id);
 /*
  * helper
  */
+/*
+typedef struct {
+    int epoll_fd;              //epoll 对应的fd
+    int uevent_fd;             //热插拔节点的sock 句柄
+    pthread_t hotplug_thread;  //对应的线程
+    int is_start;              //线程是否已经创建
+    int is_running;            //是否在while循环中运行
+} hotplug_context_t;
+
+
+static hotplug_context_t hotplug = {0};
+static char uevent_buff[KERNEL_UEVENT_LEN];
+static char card_node[32];
+
+static int recorder_init_hotplug_socket()
+{
+    int flags;
+    int ret;
+    struct sockaddr_nl address;
+    pthread_t id;
+    hotplug.uevent_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT);
+    if(hotplug.uevent_fd<0) {
+    	log_qcy(DEBUG_INFO, "create_uevent_socket socket fail.\n");
+        return -1;
+    }
+    flags = fcntl(hotplug.uevent_fd, F_GETFL, 0);
+    flags |= O_NONBLOCK;
+    fcntl(hotplug.uevent_fd, F_SETFL, flags);
+    memset(&address, 0, sizeof(address));
+    address.nl_family = AF_NETLINK;
+    address.nl_pid = getpid();
+    address.nl_groups = 1;
+    ret = bind(hotplug.uevent_fd, (struct sockaddr*)&address, sizeof(address));
+    if(ret < 0) {
+        log_qcy(DEBUG_INFO, "create_uevent_socket bind fail.\n");
+        close(hotplug.uevent_fd);
+        hotplug.uevent_fd = 0;
+        return -1;
+    }
+	ret = pthread_create(&id, NULL, recorder_hotplug_func, NULL);
+	if(ret != 0) {
+		log_qcy(DEBUG_INFO, "recorder epoll thread create error! ret = %d",ret);
+		return -1;
+	 }
+	else {
+		log_qcy(DEBUG_SERIOUS, "recorder epoll thread create successful!");
+	}
+    return 0;
+}
+
+static void recorder_destroy_hotplug_socket()
+{
+     if( hotplug.uevent_fd > 0 ) {
+         close(hotplug.uevent_fd);
+         hotplug.uevent_fd = 0;
+     }
+}
+
+static void recorder_hotplug_callback(char* recv_buff,int recv_size)
+{
+     int i;
+     char* p_str = recv_buff;
+     for(i=0;i<recv_size;i++) {
+         if(recv_buff[i] == '\0') {
+             printf("[hotplug_core] hotplug_parse_uevent p_str = %s.\n",p_str);
+             if(strcmp(p_str,"ACTION=add") == 0)
+             {
+
+             }
+             else if(strcmp(p_str,"ACTION=remove") == 0)
+             {
+
+             }
+             p_str = recv_buff+(i+1); // i+1 是为了指到\0 后面的一个字符
+         }
+     }
+}
+
+static void* recorder_hotplug_func(void *arg)
+{
+    hotplug.epoll_fd = epoll_create(EPOLL_FD_SIZE);
+    struct epoll_event ev;
+    int i,ret,recv_size;
+    struct epoll_event events[EPOLL_EVENT_SIZE];
+    signal(SIGINT, server_thread_termination);
+    signal(SIGTERM, server_thread_termination);
+    pthread_detach(pthread_self());
+    ev.events = EPOLLIN;
+    ev.data.fd = hotplug.uevent_fd;
+    epoll_ctl(hotplug.epoll_fd,EPOLL_CTL_ADD,hotplug.uevent_fd,&ev);
+    misc_set_thread_name("recorder_epoll");
+    misc_set_bit(&info.thread_start, THREAD_EPOLL, 1);
+    manager_common_send_dummy(SERVER_RECORDER);
+    log_qcy(DEBUG_INFO, "recorder-epoll thread start!---------------");
+    while( 1 ) {
+    	if( info.exit ) break;
+    	if( misc_get_bit(info.thread_exit, THREAD_EPOLL) ) break;
+        ret = epoll_wait(hotplug.epoll_fd,events,EPOLL_EVENT_SIZE,EPOLL_TIMEOUT);
+        for(i=0;i<ret;i++) {
+            if( (events[i].data.fd == hotplug.uevent_fd) && (events[i].events & EPOLLIN)) {
+               recv_size = recv(hotplug.uevent_fd, uevent_buff, KERNEL_UEVENT_LEN, 0);
+               if(recv_size > KERNEL_UEVENT_LEN) {
+                   log_qcy(DEBUG_INFO, "recorder hotplug epoll receive overflow!\n");
+                   continue;
+               }
+               recorder_hotplug_callback(uevent_buff, recv_size);
+            }
+        }
+    }
+    recorder_destroy_hotplug_socket();
+    close(hotplug.epoll_fd);
+    misc_set_bit(&info.thread_start, THREAD_EPOLL, 0);
+    manager_common_send_dummy(SERVER_RECORDER);
+    log_qcy(DEBUG_INFO, "recorder-epoll thread exit!---------------");
+    pthread_exit(0);
+}
+*/
+
 static int recorder_clean_disk(void)
 {
 	struct dirent **namelist;
@@ -992,32 +1117,6 @@ static void server_release_3(void)
 	memset(&info, 0, sizeof(server_info_t));
 }
 
-static int recorder_init_routine(void)
-{
-	int ret = 0;
-	message_t msg;
-	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG)) {
-	    /********message body********/
-		msg_init(&msg);
-		msg.message = MSG_DEVICE_GET_PARA;
-		msg.sender = msg.receiver = SERVER_RECORDER;
-		msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
-		ret = manager_common_send_message(SERVER_DEVICE, &msg);
-		/***************************/
-	}
-	if( misc_full_bit( info.init_status, RECORDER_INIT_CONDITION_NUM ) ) {
-		info.status = STATUS_WAIT;
-		/********message body********/
-		msg_init(&msg);
-		msg.message = MSG_MANAGER_TIMER_REMOVE;
-		msg.sender = msg.receiver = SERVER_RECORDER;
-		msg.arg_in.handler = recorder_init_routine;
-		manager_common_send_message(SERVER_MANAGER, &msg);
-		/****************************/
-	}
-	return 0;
-}
-
 /*
  *
  *
@@ -1078,6 +1177,7 @@ static int server_message_proc(void)
 			if( !msg.result ) {
 				if( ((device_iot_config_t*)msg.arg)->sd_iot_info.plug ) {
 					misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
+					hotplug = 0;
 				}
 			}
 			break;
@@ -1107,6 +1207,7 @@ static int server_message_proc(void)
 			info.status2 = 0;
 			break;
 		case MSG_DEVICE_SD_INSERT:
+			hotplug = 0;
 			misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
 			break;
 		case MSG_MANAGER_DUMMY:
@@ -1130,21 +1231,39 @@ static int server_none(void)
 		ret = config_recorder_read(&config);
 		if( !ret && misc_full_bit(config.status, CONFIG_RECORDER_MODULE_NUM) ) {
 			misc_set_bit(&info.init_status, RECORDER_INIT_CONDITION_CONFIG, 1);
-		    /********message body********/
-			msg_init(&msg);
-			msg.message = MSG_MANAGER_TIMER_ADD;
-			msg.sender = SERVER_RECORDER;
-			msg.arg_in.cat = 100;
-			msg.arg_in.dog = 0;
-			msg.arg_in.duck = 0;
-			msg.arg_in.handler = &recorder_init_routine;
-			manager_common_send_message(SERVER_MANAGER, &msg);
-			/****************************/
 		}
 		else {
 			info.status = STATUS_ERROR;
 			return -1;
 		}
+	}
+	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG)) {
+		if( info.tick < MESSAGE_RESENT) {
+			/********message body********/
+			msg_init(&msg);
+			msg.message = MSG_DEVICE_GET_PARA;
+			msg.sender = msg.receiver = SERVER_RECORDER;
+			msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
+			ret = manager_common_send_message(SERVER_DEVICE, &msg);
+			/***************************/
+			info.tick++;
+		}
+		usleep(MESSAGE_RESENT_SLEEP);
+	}
+	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_MIIO_TIME)) {
+		/********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MIIO_PROPERTY_GET;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		msg.arg_in.cat = MIIO_PROPERTY_TIME_SYNC;
+		ret = manager_common_send_message(SERVER_MIIO, &msg);
+		/***************************/
+		usleep(MESSAGE_RESENT_SLEEP);
+	}
+	if( misc_full_bit( info.init_status, RECORDER_INIT_CONDITION_NUM ) ) {
+		info.status = STATUS_WAIT;
+		info.tick = 0;
+//		recorder_init_hotplug_socket();
 	}
 	return ret;
 }
@@ -1397,4 +1516,21 @@ int server_recorder_audio_message(message_t *msg)
 	}
 	pthread_mutex_unlock(&vmutex[id]);
 	return ret;
+}
+
+void server_recorder_interrupt_routine(int param)
+{
+	if( param == 1) {
+		info.msg_lock = 0;
+		info.tick = 0;
+		hotplug = 1;
+		misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 0);
+		recorder_quit_all(-1);
+		recorder_broadcast_session_exit();
+		info.status = STATUS_NONE;
+		pthread_mutex_lock(&mutex);
+		pthread_cond_signal(&cond);
+		pthread_mutex_unlock(&mutex);
+		log_qcy(DEBUG_SERIOUS, "RECORDER: hotplug happened, recorder roll back to none state--------------");
+	}
 }
