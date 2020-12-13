@@ -992,6 +992,32 @@ static void server_release_3(void)
 	memset(&info, 0, sizeof(server_info_t));
 }
 
+static int recorder_init_routine(void)
+{
+	int ret = 0;
+	message_t msg;
+	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG)) {
+	    /********message body********/
+		msg_init(&msg);
+		msg.message = MSG_DEVICE_GET_PARA;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
+		ret = manager_common_send_message(SERVER_DEVICE, &msg);
+		/***************************/
+	}
+	if( misc_full_bit( info.init_status, RECORDER_INIT_CONDITION_NUM ) ) {
+		info.status = STATUS_WAIT;
+		/********message body********/
+		msg_init(&msg);
+		msg.message = MSG_MANAGER_TIMER_REMOVE;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		msg.arg_in.handler = recorder_init_routine;
+		manager_common_send_message(SERVER_MANAGER, &msg);
+		/****************************/
+	}
+	return 0;
+}
+
 /*
  *
  *
@@ -1104,23 +1130,22 @@ static int server_none(void)
 		ret = config_recorder_read(&config);
 		if( !ret && misc_full_bit(config.status, CONFIG_RECORDER_MODULE_NUM) ) {
 			misc_set_bit(&info.init_status, RECORDER_INIT_CONDITION_CONFIG, 1);
+		    /********message body********/
+			msg_init(&msg);
+			msg.message = MSG_MANAGER_TIMER_ADD;
+			msg.sender = SERVER_RECORDER;
+			msg.arg_in.cat = 100;
+			msg.arg_in.dog = 0;
+			msg.arg_in.duck = 0;
+			msg.arg_in.handler = &recorder_init_routine;
+			manager_common_send_message(SERVER_MANAGER, &msg);
+			/****************************/
 		}
 		else {
 			info.status = STATUS_ERROR;
 			return -1;
 		}
 	}
-	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG)) {
-	    /********message body********/
-		msg_init(&msg);
-		msg.message = MSG_DEVICE_GET_PARA;
-		msg.sender = msg.receiver = SERVER_RECORDER;
-		msg.arg_in.cat = DEVICE_CTRL_SD_INFO;
-		ret = manager_common_send_message(SERVER_DEVICE, &msg);
-		/***************************/
-	}
-	if( misc_full_bit( info.init_status, RECORDER_INIT_CONDITION_NUM ) )
-		info.status = STATUS_WAIT;
 	return ret;
 }
 /*
