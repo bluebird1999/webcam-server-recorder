@@ -53,11 +53,11 @@ static	recorder_config_t		config;
 static 	message_buffer_t		video_buff[MAX_RECORDER_JOB];
 static 	message_buffer_t		audio_buff[MAX_RECORDER_JOB];
 static 	recorder_job_t			jobs[MAX_RECORDER_JOB];
-static  pthread_rwlock_t		ilock = PTHREAD_MUTEX_INITIALIZER;
+static  pthread_rwlock_t		ilock = PTHREAD_RWLOCK_INITIALIZER;
 static	pthread_mutex_t			mutex = PTHREAD_MUTEX_INITIALIZER;
 static	pthread_cond_t			cond = PTHREAD_COND_INITIALIZER;
-static	pthread_mutex_t			vmutex[MAX_RECORDER_JOB] = {PTHREAD_MUTEX_INITIALIZER};
-static	pthread_cond_t			vcond[MAX_RECORDER_JOB] = {PTHREAD_COND_INITIALIZER};
+static	pthread_mutex_t			vmutex[MAX_RECORDER_JOB] = {PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER};
+static	pthread_cond_t			vcond[MAX_RECORDER_JOB] = {PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER};
 static 	char					hotplug;
 
 //function
@@ -1129,13 +1129,16 @@ static int server_message_proc(void)
 {
 	int ret = 0;
 	message_t msg;
-	if( info.msg_lock ) return 0;
 	//condition
 	pthread_mutex_lock(&mutex);
 	if( message.head == message.tail ) {
 		if( (info.status == info.old_status ) ) {
 			pthread_cond_wait(&cond,&mutex);
 		}
+	}
+	if( info.msg_lock ) {
+		pthread_mutex_unlock(&mutex);
+		return 0;
 	}
 	msg_init(&msg);
 	ret = msg_buffer_pop(&message, &msg);
