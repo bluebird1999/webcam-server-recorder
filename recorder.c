@@ -581,28 +581,20 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 		log_qcy(DEBUG_INFO, "Record file is %s\n", ctrl->run.file_path);
 	}
 	//snapshot
-	if( (access(snapname, F_OK))== -1) {
-		log_qcy(DEBUG_WARNING, "Can't find previously created snapshot %s", snapname);
-	}
-	else {
-		memset(alltime, 0, sizeof(alltime));
-		if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
-			sprintf( alltime, "%s%s/%s-%s_%s_f.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
-		}
-/*		else if( ctrl->init.type == RECORDER_TYPE_MOTION_DETECTION ) {
-			int len = strlen(snapname) - 5;
-			memcpy(alltime, snapname, len);
-			memcpy(&alltime[len], "_f.jpg", 6);
-		}
-*/
-		ret = rename(snapname, alltime);
-		if(ret) {
-			log_qcy(DEBUG_WARNING, "rename recording snapshot file %s to %s failed.\n", snapname, alltime);
+	if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
+		if( (access(snapname, F_OK))== -1) {
+			log_qcy(DEBUG_WARNING, "Can't find previously created snapshot %s", snapname);
 		}
 		else {
-			log_qcy(DEBUG_INFO, "Record snapshot file is %s\n", alltime);
-			/********message body********/
-			if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
+			memset(alltime, 0, sizeof(alltime));
+			sprintf( alltime, "%s%s/%s-%s_%s_f.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
+			ret = rename(snapname, alltime);
+			if(ret) {
+				log_qcy(DEBUG_WARNING, "rename recording snapshot file %s to %s failed.\n", snapname, alltime);
+			}
+			else {
+				log_qcy(DEBUG_INFO, "Record snapshot file is %s\n", alltime);
+				/********message body********/
 				msg_init(&msg);
 				msg.message = MSG_VIDE02_SNAPSHOT_THUMB;
 				msg.sender = msg.receiver = SERVER_RECORDER;
@@ -742,28 +734,30 @@ static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 	memset( ctrl->run.file_path, 0, sizeof(ctrl->run.file_path));
 	strcpy(ctrl->run.file_path, fname);
 	//snapshot
-	memset( fname, 0, sizeof(fname));
-	sprintf(fname,"%s%s/%s-%s-snap",ctrl->config.profile.directory,prefix,prefix,timestr);
-	/**********************************************/
-	message_t msg;
-	msg_init(&msg);
-	msg.sender = msg.receiver = SERVER_RECORDER;
-	msg.arg_in.cat = 0;
-	msg.arg_in.dog = 1;
-	msg.arg_in.duck = 0;
-	msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
-	msg.arg_in.chick = ctrl->init.type;
-	msg.arg = fname;
-	msg.arg_size = strlen(fname) + 1;
-	if(ctrl->init.video_channel == 0) {
-		msg.message = MSG_VIDEO_SNAPSHOT;
-		manager_common_send_message(SERVER_VIDEO, &msg);
+	if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
+		memset( fname, 0, sizeof(fname));
+		sprintf(fname,"%s%s/%s-%s-snap",ctrl->config.profile.directory,prefix,prefix,timestr);
+		/**********************************************/
+		message_t msg;
+		msg_init(&msg);
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		msg.arg_in.cat = 0;
+		msg.arg_in.dog = 1;
+		msg.arg_in.duck = 0;
+		msg.arg_in.tiger = RTS_AV_CB_TYPE_ASYNC;
+		msg.arg_in.chick = ctrl->init.type;
+		msg.arg = fname;
+		msg.arg_size = strlen(fname) + 1;
+		if(ctrl->init.video_channel == 0) {
+			msg.message = MSG_VIDEO_SNAPSHOT;
+			manager_common_send_message(SERVER_VIDEO, &msg);
+		}
+		else if(ctrl->init.video_channel == 1) {
+			msg.message = MSG_VIDE02_SNAPSHOT;
+			manager_common_send_message(SERVER_VIDEO2, &msg);
+		}
+		/**********************************************/
 	}
-	else if(ctrl->init.video_channel == 1) {
-		msg.message = MSG_VIDE02_SNAPSHOT;
-		manager_common_send_message(SERVER_VIDEO2, &msg);
-	}
-	/**********************************************/
 	return ret;
 }
 
