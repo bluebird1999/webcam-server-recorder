@@ -376,6 +376,10 @@ static int recorder_set_property(message_t *msg)
 				recorder_quit_all(-1);
 				info.status = STATUS_WAIT;
 			}
+			else {
+				info.status = STATUS_WAIT;
+			}
+			info.status2 = 0;
 			config.profile.enable = temp;
 			log_qcy(DEBUG_SERIOUS, "changed the enable = %d", config.profile.enable);
 			config_recorder_set(CONFIG_RECORDER_PROFILE, &config.profile);
@@ -1057,6 +1061,7 @@ static int recorder_add_job( message_t* msg )
 			 }
 			else {
 				misc_set_bit(&info.thread_start, i, 1);
+				misc_set_bit(&info.thread_exit, i, 0);
 				log_qcy(DEBUG_INFO, "recorder thread create successful!");
 				jobs[i].status = RECORDER_THREAD_STARTED;
 			}
@@ -1170,14 +1175,17 @@ static int server_message_proc(void)
 		case MSG_MANAGER_TIMER_ACK:
 			((HANDLER)msg.arg_in.handler)();
 			break;
-		case MSG_DEVICE_GET_PARA_ACK:
+		case MSG_DEVICE_GET_PARA_ACK: {
+			device_iot_config_t dev_iot;
 			if( !msg.result ) {
-				if( ((device_iot_config_t*)msg.arg)->sd_iot_info.plug ) {
+				memcpy(&dev_iot, msg.arg, sizeof(device_iot_config_t));
+				if( dev_iot.sd_iot_info.plug == SD_STATUS_PLUG ) {
 					misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
 					hotplug = 0;
 				}
 			}
 			break;
+		}
 		case MSG_RECORDER_PROPERTY_SET:
 			ret = recorder_set_property(&msg);
 			break;
