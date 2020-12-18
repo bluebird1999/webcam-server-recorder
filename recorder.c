@@ -59,6 +59,7 @@ static	pthread_cond_t			cond = PTHREAD_COND_INITIALIZER;
 static	pthread_mutex_t			vmutex[MAX_RECORDER_JOB] = {PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER,PTHREAD_MUTEX_INITIALIZER};
 static	pthread_cond_t			vcond[MAX_RECORDER_JOB] = {PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER,PTHREAD_COND_INITIALIZER};
 static 	char					hotplug;
+static  int            			device_umount_flag = 0;
 
 //function
 //common
@@ -90,7 +91,7 @@ static int recorder_start_init_recorder_job(void);
 static int recorder_get_property(message_t *msg);
 static int recorder_set_property(message_t *msg);
 static int recorder_quit_all(int id);
-//static void* recorder_hotplug_func(void *arg);
+static void recorder_broadcast_session_exit(void);
 /*
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  * %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
@@ -100,123 +101,16 @@ static int recorder_quit_all(int id);
 /*
  * helper
  */
-/*
-typedef struct {
-    int epoll_fd;              //epoll 对应的fd
-    int uevent_fd;             //热插拔节点的sock 句柄
-    pthread_t hotplug_thread;  //对应的线程
-    int is_start;              //线程是否已经创建
-    int is_running;            //是否在while循环中运行
-} hotplug_context_t;
-
-
-static hotplug_context_t hotplug = {0};
-static char uevent_buff[KERNEL_UEVENT_LEN];
-static char card_node[32];
-
-static int recorder_init_hotplug_socket()
+static int recorder_check_sd(void)
 {
-    int flags;
-    int ret;
-    struct sockaddr_nl address;
-    pthread_t id;
-    hotplug.uevent_fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_KOBJECT_UEVENT);
-    if(hotplug.uevent_fd<0) {
-    	log_qcy(DEBUG_INFO, "create_uevent_socket socket fail.\n");
-        return -1;
-    }
-    flags = fcntl(hotplug.uevent_fd, F_GETFL, 0);
-    flags |= O_NONBLOCK;
-    fcntl(hotplug.uevent_fd, F_SETFL, flags);
-    memset(&address, 0, sizeof(address));
-    address.nl_family = AF_NETLINK;
-    address.nl_pid = getpid();
-    address.nl_groups = 1;
-    ret = bind(hotplug.uevent_fd, (struct sockaddr*)&address, sizeof(address));
-    if(ret < 0) {
-        log_qcy(DEBUG_INFO, "create_uevent_socket bind fail.\n");
-        close(hotplug.uevent_fd);
-        hotplug.uevent_fd = 0;
-        return -1;
-    }
-	ret = pthread_create(&id, NULL, recorder_hotplug_func, NULL);
-	if(ret != 0) {
-		log_qcy(DEBUG_INFO, "recorder epoll thread create error! ret = %d",ret);
+	if( access("/mnt/media/normal", F_OK) ) {
+		recorder_quit_all(-1);
+		log_qcy(DEBUG_INFO, "SD card access failed!, quit all!----");
 		return -1;
-	 }
-	else {
-		log_qcy(DEBUG_SERIOUS, "recorder epoll thread create successful!");
 	}
-    return 0;
+	else
+		return 0;
 }
-
-static void recorder_destroy_hotplug_socket()
-{
-     if( hotplug.uevent_fd > 0 ) {
-         close(hotplug.uevent_fd);
-         hotplug.uevent_fd = 0;
-     }
-}
-
-static void recorder_hotplug_callback(char* recv_buff,int recv_size)
-{
-     int i;
-     char* p_str = recv_buff;
-     for(i=0;i<recv_size;i++) {
-         if(recv_buff[i] == '\0') {
-             printf("[hotplug_core] hotplug_parse_uevent p_str = %s.\n",p_str);
-             if(strcmp(p_str,"ACTION=add") == 0)
-             {
-
-             }
-             else if(strcmp(p_str,"ACTION=remove") == 0)
-             {
-
-             }
-             p_str = recv_buff+(i+1); // i+1 是为了指到\0 后面的一个字符
-         }
-     }
-}
-
-static void* recorder_hotplug_func(void *arg)
-{
-    hotplug.epoll_fd = epoll_create(EPOLL_FD_SIZE);
-    struct epoll_event ev;
-    int i,ret,recv_size;
-    struct epoll_event events[EPOLL_EVENT_SIZE];
-    signal(SIGINT, server_thread_termination);
-    signal(SIGTERM, server_thread_termination);
-    pthread_detach(pthread_self());
-    ev.events = EPOLLIN;
-    ev.data.fd = hotplug.uevent_fd;
-    epoll_ctl(hotplug.epoll_fd,EPOLL_CTL_ADD,hotplug.uevent_fd,&ev);
-    misc_set_thread_name("recorder_epoll");
-    misc_set_bit(&info.thread_start, THREAD_EPOLL, 1);
-    manager_common_send_dummy(SERVER_RECORDER);
-    log_qcy(DEBUG_INFO, "recorder-epoll thread start!---------------");
-    while( 1 ) {
-    	if( info.exit ) break;
-    	if( misc_get_bit(info.thread_exit, THREAD_EPOLL) ) break;
-        ret = epoll_wait(hotplug.epoll_fd,events,EPOLL_EVENT_SIZE,EPOLL_TIMEOUT);
-        for(i=0;i<ret;i++) {
-            if( (events[i].data.fd == hotplug.uevent_fd) && (events[i].events & EPOLLIN)) {
-               recv_size = recv(hotplug.uevent_fd, uevent_buff, KERNEL_UEVENT_LEN, 0);
-               if(recv_size > KERNEL_UEVENT_LEN) {
-                   log_qcy(DEBUG_INFO, "recorder hotplug epoll receive overflow!\n");
-                   continue;
-               }
-               recorder_hotplug_callback(uevent_buff, recv_size);
-            }
-        }
-    }
-    recorder_destroy_hotplug_socket();
-    close(hotplug.epoll_fd);
-    misc_set_bit(&info.thread_start, THREAD_EPOLL, 0);
-    manager_common_send_dummy(SERVER_RECORDER);
-    log_qcy(DEBUG_INFO, "recorder-epoll thread exit!---------------");
-    pthread_exit(0);
-}
-*/
 
 static int recorder_clean_disk(void)
 {
@@ -227,16 +121,20 @@ static int recorder_clean_disk(void)
 	char 	thisdate[MAX_SYSTEM_STRING_SIZE];
 	unsigned long long int cutoff_date, today;
 	char 	*p = NULL;
-	unsigned long long int start;
+	unsigned long long int start, block_time, now;
 	int		i = 0;
+	int		deleted = 0;
 	//***
 	memset(thisdate, 0, sizeof(thisdate));
-	time_stamp_to_date( time_get_now_stamp(), thisdate);
+	now = time_get_now_stamp();
+	time_stamp_to_date( now, thisdate);
 	strcpy(&thisdate[8], "000000");
 	thisdate[14] = '\0';
 	today = time_date_to_stamp(thisdate);
+	block_time = 0;
+restart:
 	log_qcy(DEBUG_INFO, "----------start sd cleanning job-------");
-	cutoff_date = today - 0 * 86400;
+	cutoff_date = today - 0 * 86400 + block_time;
 	memset(thisdate, 0, sizeof(thisdate));
 	time_stamp_to_date(cutoff_date, thisdate);
 	log_qcy(DEBUG_INFO, "----------delete media file before %s-------", thisdate);
@@ -271,7 +169,14 @@ static int recorder_clean_disk(void)
 					//remove file here.
 					memset(name, 0, sizeof(name));
 					sprintf(name, "%s%s", path, namelist[index]->d_name);
-					remove( name );
+					if( !recorder_check_sd() ) {
+						remove( name );
+						deleted++;
+					}
+					else {
+						free(namelist[index]);
+						goto exit;
+					}
 					log_qcy(DEBUG_INFO, "---removed %s---", name);
 					goto exit;
 				}
@@ -285,7 +190,14 @@ static int recorder_clean_disk(void)
 						//remove
 						memset(name, 0, sizeof(name));
 						sprintf(name, "%s%s", path, namelist[index]->d_name);
-						remove( name );
+						if( !recorder_check_sd() ) {
+							remove( name );
+							deleted++;
+						}
+						else {
+							free(namelist[index]);
+							goto exit;
+						}
 						log_qcy(DEBUG_INFO, "---removed %s---", name);
 					}
 				}
@@ -298,6 +210,11 @@ static int recorder_clean_disk(void)
 		namelist = NULL;
 		i++;
 	}
+	if( deleted == 0 ) {
+		block_time += 3600;
+		if( ( cutoff_date + block_time) < now)
+			goto restart;
+	}
     return 0;
 }
 
@@ -305,20 +222,26 @@ static int recorder_quit_all(int id)
 {
 	int ret = 0;
 	int i;
-	pthread_rwlock_wrlock(&ilock);
+	pthread_rwlock_wrlock(&ilock);		//remove this for fast response
 	for( i=0; i<MAX_RECORDER_JOB; i++ ) {
 		if( id !=-1 && i!=id ) continue;
-		misc_set_bit( &info.thread_exit, i, 1);
+		if(misc_get_bit(info.thread_start, i))
+			misc_set_bit( &info.thread_exit, i, 1);
 	}
+	info.status2 = 0;
+	recorder_broadcast_session_exit();
+	info.status = STATUS_NONE;
 	pthread_rwlock_unlock(&ilock);
+	pthread_mutex_lock(&mutex);
+	pthread_cond_signal(&cond);
+	pthread_mutex_unlock(&mutex);
 	return ret;
 }
 
 static int recorder_get_property(message_t *msg)
 {
-	int ret = 0, st;
+	int ret = 0;
 	message_t send_msg;
-	st = info.status;
     /********message body********/
 	msg_init(&send_msg);
 	memcpy(&(send_msg.arg_pass), &(msg->arg_pass),sizeof(message_arg_t));
@@ -379,7 +302,6 @@ static int recorder_set_property(message_t *msg)
 			else {
 				info.status = STATUS_WAIT;
 			}
-			info.status2 = 0;
 			config.profile.enable = temp;
 			log_qcy(DEBUG_SERIOUS, "changed the enable = %d", config.profile.enable);
 			config_recorder_set(CONFIG_RECORDER_PROFILE, &config.profile);
@@ -587,6 +509,11 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	//snapshot
 	if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
 		if( (access(snapname, F_OK))== -1) {
+            msg_init(&msg);
+            msg.sender = msg.receiver = SERVER_VIDEO2;
+            msg.message = MSG_DEVICE_ACTION;
+            msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
+            server_device_message(&msg);
 			log_qcy(DEBUG_WARNING, "Can't find previously created snapshot %s", snapname);
 		}
 		else {
@@ -594,6 +521,11 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 			sprintf( alltime, "%s%s/%s-%s_%s_f.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
 			ret = rename(snapname, alltime);
 			if(ret) {
+	            msg_init(&msg);
+	            msg.sender = msg.receiver = SERVER_VIDEO2;
+	            msg.message = MSG_DEVICE_ACTION;
+	            msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
+	            server_device_message(&msg);
 				log_qcy(DEBUG_WARNING, "rename recording snapshot file %s to %s failed.\n", snapname, alltime);
 			}
 			else {
@@ -627,20 +559,24 @@ static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, av_packet_t *p
 		switch ( nalu.type) {
 			case 0x07:
 				if ( !ctrl->run.sps_read ) {
-					ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000,
-							MP4_INVALID_DURATION /*90000 / info->fps*/,
-							info->width,
-							info->height,
-							nalu.data[1], nalu.data[2], nalu.data[3], 3);
-	//					ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000, 90000/15, 800, 600,0x4d, 0x40, 0x1f, 3);
-						if( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
-							return -1;
-						}
-						ctrl->run.sps_read = 1;
-						MP4SetVideoProfileLevel( ctrl->run.mp4_file, 0x7F);
-						MP4AddH264SequenceParameterSet( ctrl->run.mp4_file, ctrl->run.video_track, nalu.data, nalu.size);
+					if( !recorder_check_sd() ) {
+						ctrl->run.video_track = MP4AddH264VideoTrack(ctrl->run.mp4_file, 90000,
+								MP4_INVALID_DURATION /*90000 / info->fps*/,
+								info->width,
+								info->height,
+								nalu.data[1], nalu.data[2], nalu.data[3], 3);
 					}
-					break;
+					else {
+						return -1;
+					}
+					if( ctrl->run.video_track == MP4_INVALID_TRACK_ID ) {
+						return -1;
+					}
+					ctrl->run.sps_read = 1;
+					MP4SetVideoProfileLevel( ctrl->run.mp4_file, 0x7F);
+					MP4AddH264SequenceParameterSet( ctrl->run.mp4_file, ctrl->run.video_track, nalu.data, nalu.size);
+				}
+				break;
 			case 0x08:
 				if ( ctrl->run.pps_read ) break;
 				if ( !ctrl->run.sps_read ) break;
@@ -676,8 +612,14 @@ static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, av_packet_t *p
 					duration	= 90000 / info->fps;
 					offset		= 0;
 				}
-				ret = MP4WriteSample(ctrl->run.mp4_file, ctrl->run.video_track, data, nlength,
+				if( !recorder_check_sd() ) {
+					ret = MP4WriteSample(ctrl->run.mp4_file, ctrl->run.video_track, data, nlength,
 						duration, 0, key);
+				}
+				else {
+					free(data);
+					return -1;
+				}
 				if( !ret ) {
 				  free(data);
 				  return -1;
@@ -702,7 +644,6 @@ static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, av_packet_t *p
 	return 0;
 }
 
-
 static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 {
 	int ret = 0;
@@ -718,15 +659,25 @@ static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 		strcpy( &prefix, ctrl->config.profile.alarm_prefix);
 	time_stamp_to_date(ctrl->run.start, timestr);
 	sprintf(fname,"%s%s/%s-%s",ctrl->config.profile.directory,prefix,prefix,timestr);
-	ctrl->run.mp4_file = MP4CreateEx(fname,	0, 1, 1, 0, 0, 0, 0);
+	if( !recorder_check_sd() ) {
+		ctrl->run.mp4_file = MP4CreateEx(fname,	0, 1, 1, 0, 0, 0, 0);
+	}
+	else {
+		return -1;
+	}
 	if ( ctrl->run.mp4_file == MP4_INVALID_FILE_HANDLE) {
 		printf("MP4CreateEx file failed.\n");
 		return -1;
 	}
 	MP4SetTimeScale( ctrl->run.mp4_file, 90000);
 	if( ctrl->init.audio ) {
-		ctrl->run.audio_track = MP4AddALawAudioTrack( ctrl->run.mp4_file,
+		if( !recorder_check_sd() ) {
+			ctrl->run.audio_track = MP4AddALawAudioTrack( ctrl->run.mp4_file,
 				ctrl->config.profile.quality[ctrl->init.quality].audio_sample);
+		}
+		else {
+			return -1;
+		}
 		if ( ctrl->run.audio_track == MP4_INVALID_TRACK_ID) {
 			printf("add audio track failed.\n");
 			return -1;
@@ -834,9 +785,16 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 				offset		= 0;
 				ctrl->run.first_audio = 1;
 			}
-			if( !MP4WriteSample( ctrl->run.mp4_file, ctrl->run.audio_track,
-					(unsigned char*)packet->data, packet->info.size ,
-					256, 0, 1) ) {
+			if( !recorder_check_sd() ) {
+				ret = MP4WriteSample( ctrl->run.mp4_file, ctrl->run.audio_track,
+						(unsigned char*)packet->data, packet->info.size ,
+						256, 0, 1);
+			}
+			else {
+				ret = ERR_ERROR;
+				goto close_exit;
+			}
+			if( !ret ) {
 				log_qcy(DEBUG_WARNING, "MP4WriteSample audio failed.\n");
 				ret = ERR_NO_DATA;
 			}
@@ -922,6 +880,8 @@ static int recorder_thread_started( recorder_job_t *ctrl )
 static int *recorder_func(void *arg)
 {
 	recorder_job_t ctrl;
+	int i, finish_bit;
+	message_t send_msg;
 	char fname[MAX_SYSTEM_STRING_SIZE];
 	memcpy(&ctrl, (recorder_job_t*)arg, sizeof(recorder_job_t));
     signal(SIGINT, server_thread_termination);
@@ -946,7 +906,7 @@ static int *recorder_func(void *arg)
 	log_qcy(DEBUG_INFO, "now=%ld", time_get_now_stamp());
 	log_qcy(DEBUG_INFO, "start=%ld", ctrl.run.start);
 	log_qcy(DEBUG_INFO, "end=%ld", ctrl.run.stop);
-	log_qcy(DEBUG_INFO, "video channel=%d", ctrl.init.video_channel);
+	log_qcy(DEBUG_INFO, "video channel=%d", ctrl.t_id);
 	log_qcy(DEBUG_INFO, "--------------------------------------------------");
     ctrl.status = RECORDER_THREAD_STARTED;
     while( 1 ) {
@@ -973,6 +933,21 @@ static int *recorder_func(void *arg)
     recorder_thread_destroy(&ctrl);
     manager_common_send_dummy(SERVER_RECORDER);
     log_qcy(DEBUG_INFO, "-----------thread exit: record %s-----------", fname);
+    if(device_umount_flag){
+       finish_bit = 0;
+       for( i=0; i<MAX_RECORDER_JOB; i++ ) {
+    	   finish_bit |= misc_get_bit(info.thread_exit, i);
+       }
+       log_qcy(DEBUG_INFO, "-----------thread exit: finish_bit %d-----------", finish_bit);
+       if(!finish_bit){
+		   msg_init(&send_msg);
+		   send_msg.sender = send_msg.receiver = SERVER_RECORDER;
+		   send_msg.message = MSG_DEVICE_ACTION;
+		   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
+		   server_device_message(&send_msg);
+		   device_umount_flag = 0;
+       }
+    }
     pthread_exit(0);
 }
 
@@ -991,12 +966,19 @@ static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl )
 static int recorder_thread_destroy( recorder_job_t *ctrl )
 {
 	int ret=0,ret1;
-	recorder_thread_close( ctrl );
+	message_t msg;
+	ret = recorder_thread_close( ctrl );
+	if(ret) {
+        msg_init(&msg);
+        msg.sender = msg.receiver = SERVER_VIDEO2;
+        msg.message = MSG_DEVICE_ACTION;
+        msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
+        server_device_message(&msg);
+	}
 	msg_buffer_release2(&video_buff[ctrl->t_id], &vmutex[ctrl->t_id]);
 	msg_buffer_release2(&audio_buff[ctrl->t_id], &vmutex[ctrl->t_id]);
-//	if( !count_job_other_live(ctrl->t_id) ) {
-		recorder_thread_stop_stream( ctrl );
-//	}
+	recorder_thread_stop_stream( ctrl );
+
 	pthread_rwlock_wrlock(&ilock);
 	misc_set_bit( &info.thread_start, ctrl->t_id, 0);
 	misc_set_bit( &info.thread_exit,ctrl->t_id, 0);
@@ -1094,11 +1076,6 @@ static void recorder_broadcast_session_exit(void)
 	}
 }
 
-static void recorder_broadcast_thread_exit(void)
-{
-	recorder_broadcast_session_exit();
-}
-
 static void server_release_1(void)
 {
 	recorder_broadcast_session_exit();
@@ -1133,7 +1110,10 @@ static int recorder_message_filter(message_t  *msg)
 static int server_message_proc(void)
 {
 	int ret = 0;
+	int i;
+	int finish_flag = 0;
 	message_t msg;
+	message_t send_msg;
 	//condition
 	pthread_mutex_lock(&mutex);
 	if( message.head == message.tail ) {
@@ -1146,6 +1126,7 @@ static int server_message_proc(void)
 		return 0;
 	}
 	msg_init(&msg);
+	msg_init(&send_msg);
 	ret = msg_buffer_pop(&message, &msg);
 	pthread_mutex_unlock(&mutex);
 	if( ret == 1)
@@ -1163,7 +1144,8 @@ static int server_message_proc(void)
 	switch(msg.message) {
 		case MSG_RECORDER_ADD:
 			info.task.func = task_add_job;
-			info.msg_lock = 1;
+			if(info.status2)
+				info.msg_lock = 1;
 			break;
 		case MSG_RECORDER_ADD_ACK:
 			break;
@@ -1177,9 +1159,22 @@ static int server_message_proc(void)
 			break;
 		case MSG_DEVICE_GET_PARA_ACK: {
 			device_iot_config_t dev_iot;
+			char fname[MAX_SYSTEM_STRING_SIZE*4];
 			if( !msg.result ) {
 				memcpy(&dev_iot, msg.arg, sizeof(device_iot_config_t));
 				if( dev_iot.sd_iot_info.plug == SD_STATUS_PLUG ) {
+					memset(fname, 0, sizeof(fname));
+					sprintf(fname, "%s%s", config.profile.directory, config.profile.normal_prefix);
+					if( access(fname, F_OK) )
+						mkdir(fname,0777);
+					memset(fname, 0, sizeof(fname));
+					sprintf(fname, "%s%s", config.profile.directory, config.profile.motion_prefix);
+					if( access(fname, F_OK) )
+						mkdir(fname,0777);
+					memset(fname, 0, sizeof(fname));
+					sprintf(fname, "%s%s", config.profile.directory, config.profile.alarm_prefix);
+					if( access(fname, F_OK) )
+						mkdir(fname,0777);
 					misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
 					hotplug = 0;
 				}
@@ -1202,21 +1197,44 @@ static int server_message_proc(void)
 		case MSG_MANAGER_EXIT_ACK:
 			misc_set_bit(&info.error, msg.sender, 0);
 			break;
-		case MSG_DEVICE_SD_CAP_ALARM:
-			recorder_clean_disk();
-			break;
-		case MSG_DEVICE_SD_EJECTED:
-			recorder_quit_all(-1);
-			misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 0);
-			info.status = STATUS_NONE;
-			info.status2 = 0;
-			break;
-		case MSG_DEVICE_SD_INSERT:
-			hotplug = 0;
-			misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 1);
-			break;
 		case MSG_MANAGER_DUMMY:
 			break;
+		case MSG_DEVICE_ACTION:
+			if(msg.arg_in.cat == DEVICE_ACTION_SD_CAP_ALARM) {
+				recorder_clean_disk();
+			}
+			else if(msg.arg_in.cat == DEVICE_ACTION_SD_EJECTED){
+				recorder_quit_all(-1);
+				misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 0);
+				info.status = STATUS_NONE;
+				info.status2 = 0;
+				info.tick = 10;
+				if(msg.arg_in.wolf) {
+					for( i=0; i<MAX_RECORDER_JOB; i++ ) {
+						finish_flag |= misc_get_bit(info.thread_exit, i);
+					}
+					if(!finish_flag) {
+					   send_msg.sender = send_msg.receiver = SERVER_RECORDER;
+					   send_msg.message = MSG_DEVICE_ACTION;
+					   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
+					   server_device_message(&send_msg);
+
+					   send_msg.sender = send_msg.receiver = SERVER_VIDEO2;
+					   send_msg.message = MSG_DEVICE_ACTION;
+					   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
+					   server_device_message(&send_msg);
+
+					}
+					else {
+						device_umount_flag = 1;
+					}
+				}
+			}
+			else if(msg.arg_in.cat == DEVICE_ACTION_SD_INSERT) {
+				hotplug = 0;
+				info.tick = 0;	//restart the device check
+			}
+ 			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
 			break;
@@ -1242,7 +1260,7 @@ static int server_none(void)
 			return -1;
 		}
 	}
-	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG)) {
+	if( !misc_get_bit( info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG) && !device_umount_flag ) {
 		if( info.tick < MESSAGE_RESENT) {
 			/********message body********/
 			msg_init(&msg);
@@ -1375,9 +1393,13 @@ static void task_exit(void)
 {
 	switch( info.status ){
 		case EXIT_INIT:
-			info.error = RECORDER_EXIT_CONDITION;
+			log_qcy(DEBUG_INFO,"RECORDER: switch to exit task!");
 			if( info.task.msg.sender == SERVER_MANAGER) {
+				info.error = RECORDER_EXIT_CONDITION;
 				info.error &= (info.task.msg.arg_in.cat);
+			}
+			else {
+				info.error = 0;
 			}
 			info.status = EXIT_SERVER;
 			break;
@@ -1391,7 +1413,7 @@ static void task_exit(void)
 			break;
 		case EXIT_THREAD:
 			info.thread_exit = info.thread_start;
-			recorder_broadcast_thread_exit();
+			recorder_broadcast_session_exit();
 			if( !info.thread_start )
 				info.status = EXIT_STAGE2;
 			break;
@@ -1531,11 +1553,6 @@ void server_recorder_interrupt_routine(int param)
 		hotplug = 1;
 		misc_set_bit( &info.init_status, RECORDER_INIT_CONDITION_DEVICE_CONFIG, 0);
 		recorder_quit_all(-1);
-		recorder_broadcast_session_exit();
-		info.status = STATUS_NONE;
-		pthread_mutex_lock(&mutex);
-		pthread_cond_signal(&cond);
-		pthread_mutex_unlock(&mutex);
 		log_qcy(DEBUG_SERIOUS, "RECORDER: hotplug happened, recorder roll back to none state--------------");
 	}
 }
