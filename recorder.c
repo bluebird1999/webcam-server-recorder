@@ -124,7 +124,14 @@ static int recorder_clean_disk(void)
 	unsigned long long int start, block_time, now;
 	int		i = 0;
 	int		deleted = 0;
+	message_t msg;
 	//***
+	/****************************/
+	msg_init(&msg);
+	msg.message = MSG_RECORDER_CLEAN_DISK_START;
+	msg.sender = msg.receiver = SERVER_RECORDER;
+	manager_common_send_message(SERVER_PLAYER, &msg);
+	/****************************/
 	memset(thisdate, 0, sizeof(thisdate));
 	now = time_get_now_stamp();
 	time_stamp_to_date( now, thisdate);
@@ -132,9 +139,13 @@ static int recorder_clean_disk(void)
 	thisdate[14] = '\0';
 	today = time_date_to_stamp(thisdate);
 	block_time = 0;
+	memset(thisdate, 0, sizeof(thisdate));
+	time_stamp_to_date(now, thisdate);
+	log_qcy(DEBUG_INFO, "----------current time is %s-------", thisdate);
 restart:
 	log_qcy(DEBUG_INFO, "----------start sd cleanning job-------");
-	cutoff_date = today - 0 * 86400 + block_time;
+//	cutoff_date = today - 0 * 86400 + block_time;
+	cutoff_date = now - 1 * 86400 + block_time;
 	memset(thisdate, 0, sizeof(thisdate));
 	time_stamp_to_date(cutoff_date, thisdate);
 	log_qcy(DEBUG_INFO, "----------delete media file before %s-------", thisdate);
@@ -167,7 +178,7 @@ restart:
 				if( (strstr(namelist[index]->d_name,".mp4") == NULL) &&
 						(strstr(namelist[index]->d_name,".jpg") == NULL)	) {
 					//remove file here.
-					memset(name, 0, sizeof(name));
+/*					memset(name, 0, sizeof(name));
 					sprintf(name, "%s%s", path, namelist[index]->d_name);
 					if( !recorder_check_sd() ) {
 						remove( name );
@@ -178,6 +189,7 @@ restart:
 						goto exit;
 					}
 					log_qcy(DEBUG_INFO, "---removed %s---", name);
+*/
 					goto exit;
 				}
 				p = NULL;
@@ -192,13 +204,12 @@ restart:
 						sprintf(name, "%s%s", path, namelist[index]->d_name);
 						if( !recorder_check_sd() ) {
 							remove( name );
+							log_qcy(DEBUG_VERBOSE, "---removed %s---", name);
 							deleted++;
 						}
 						else {
-							free(namelist[index]);
 							goto exit;
 						}
-						log_qcy(DEBUG_INFO, "---removed %s---", name);
 					}
 				}
 			exit:
@@ -211,9 +222,20 @@ restart:
 		i++;
 	}
 	if( deleted == 0 ) {
-		block_time += 3600;
-		if( ( cutoff_date + block_time) < now)
+		block_time += 3600*4;	//4 hours step
+		if( block_time < 86400 ) {
+			i = 0;
 			goto restart;
+		}
+	}
+	if( deleted ) {
+		log_qcy(DEBUG_INFO, "---removed %d files from sd!!!---", deleted);
+	/****************************/
+		msg_init(&msg);
+		msg.message = MSG_RECORDER_CLEAN_DISK_STOP;
+		msg.sender = msg.receiver = SERVER_RECORDER;
+		manager_common_send_message(SERVER_PLAYER, &msg);
+	/****************************/
 	}
     return 0;
 }
