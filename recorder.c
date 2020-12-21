@@ -37,7 +37,7 @@
 #include "../../server/audio/audio_interface.h"
 #include "../../server/device/device_interface.h"
 #include "../../server/video2/video2_interface.h"
-//#include "../../server/micloud/micloud_interface.h"
+#include "../../server/micloud/micloud_interface.h"
 //server header
 #include "recorder.h"
 #include "recorder_interface.h"
