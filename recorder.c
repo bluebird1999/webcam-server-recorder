@@ -33,13 +33,14 @@
 #include "../../tools/tools_interface.h"
 #include "../../server/recorder/recorder_interface.h"
 #include "../../server/miio/miio_interface.h"
-#include "../../server/video/video_interface.h"
 #include "../../server/audio/audio_interface.h"
 #include "../../server/device/device_interface.h"
-#include "../../server/video2/video2_interface.h"
 #include "../../server/micloud/micloud_interface.h"
 //server header
 #include "recorder.h"
+
+#include "../video/video_interface.h"
+#include "../video2/video2_interface.h"
 #include "recorder_interface.h"
 #include "config.h"
 
@@ -358,7 +359,7 @@ static int recorder_start_init_recorder_job(void)
 		msg_init(&msg);
 		msg.message = MSG_RECORDER_ADD;
 		msg.sender = msg.receiver = SERVER_RECORDER;
-		init.video_channel = 1;
+		init.video_channel = 0;
 		init.mode = RECORDER_MODE_BY_TIME;
 		init.type = RECORDER_TYPE_NORMAL;
 		init.audio = config.profile.normal_audio;
@@ -532,7 +533,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
 		if( (access(snapname, F_OK))== -1) {
             msg_init(&msg);
-            msg.sender = msg.receiver = SERVER_VIDEO2;
+            msg.sender = msg.receiver = SERVER_VIDEO;
             msg.message = MSG_DEVICE_ACTION;
             msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
             server_device_message(&msg);
@@ -544,7 +545,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 			ret = rename(snapname, alltime);
 			if(ret) {
 	            msg_init(&msg);
-	            msg.sender = msg.receiver = SERVER_VIDEO2;
+	            msg.sender = msg.receiver = SERVER_VIDEO;
 	            msg.message = MSG_DEVICE_ACTION;
 	            msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
 	            server_device_message(&msg);
@@ -554,12 +555,12 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 				log_qcy(DEBUG_INFO, "Record snapshot file is %s\n", alltime);
 				/********message body********/
 				msg_init(&msg);
-				msg.message = MSG_VIDE02_SNAPSHOT_THUMB;
+				msg.message = MSG_VIDE0_SNAPSHOT_THUMB;
 				msg.sender = msg.receiver = SERVER_RECORDER;
 				msg.arg_in.cat = ctrl->init.type;
 				msg.arg = alltime;
 				msg.arg_size = strlen(alltime) + 1;
-				ret = manager_common_send_message(SERVER_VIDEO2, &msg);
+				ret = manager_common_send_message(SERVER_VIDEO, &msg);
 			}
 		}
 	}
@@ -725,14 +726,8 @@ static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 		msg.arg_in.chick = ctrl->init.type;
 		msg.arg = fname;
 		msg.arg_size = strlen(fname) + 1;
-		if(ctrl->init.video_channel == 0) {
-			msg.message = MSG_VIDEO_SNAPSHOT;
-			manager_common_send_message(SERVER_VIDEO, &msg);
-		}
-		else if(ctrl->init.video_channel == 1) {
-			msg.message = MSG_VIDE02_SNAPSHOT;
-			manager_common_send_message(SERVER_VIDEO2, &msg);
-		}
+		msg.message = MSG_VIDEO_SNAPSHOT;
+		manager_common_send_message(SERVER_VIDEO, &msg);
 		/**********************************************/
 	}
 	return ret;
@@ -784,16 +779,18 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	msg_init(&vmsg);
 	ret_video = msg_buffer_pop(&video_buff[ctrl->t_id], &vmsg);
     //read audio frame
-	if( ctrl->init.audio ) {
-		msg_init(&amsg);
-		ret_audio = msg_buffer_pop(&audio_buff[ctrl->t_id], &amsg);
-	}
+	msg_init(&amsg);
+	ret_audio = msg_buffer_pop(&audio_buff[ctrl->t_id], &amsg);
 	pthread_mutex_unlock(&vmutex[ctrl->t_id]);
 	if ( !ret_audio ) {
 		packet = (av_packet_t*)(amsg.arg);
-	    pthread_rwlock_rdlock(packet->lock);
-	    if( ( (*(packet->init))==0 ) ||
-			( packet->data == NULL ) ) {
+	    pthread_rwlock_wrlock(packet->lock);
+	    if( ( (*(packet->init))==0 ) ) {
+	    	av_packet_sub(packet);
+	    	pthread_rwlock_unlock(packet->lock);
+	    	return ERR_NO_DATA;
+	    }
+	    if( ( packet->data == NULL ) ) {
 	    	pthread_rwlock_unlock(packet->lock);
 	    	return ERR_NO_DATA;
 	    }
@@ -813,12 +810,18 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 						256, 0, 1);
 			}
 			else {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
 				ret = ERR_ERROR;
+				log_qcy(DEBUG_WARNING, "SD protection happened!---audio write aborted!\n");
 				goto close_exit;
 			}
 			if( !ret ) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+				ret = ERR_ERROR;
 				log_qcy(DEBUG_WARNING, "MP4WriteSample audio failed.\n");
-				ret = ERR_NO_DATA;
+				goto close_exit;
 			}
 			ctrl->run.last_aframe_stamp = packet->info.timestamp;
 		}
@@ -827,9 +830,13 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	}
 	if( !ret_video ) {
 		packet = (av_packet_t*)(vmsg.arg);
-	    pthread_rwlock_rdlock(packet->lock);
-	    if( ( *(packet->init)==0  ) ||
-	    	( packet->data == NULL ) ) {
+	    pthread_rwlock_wrlock(packet->lock);
+	    if( ( *(packet->init)==0  ) ) {
+	    	av_packet_sub(packet);
+	    	pthread_rwlock_unlock(packet->lock);
+	    	return ERR_NO_DATA;
+	    }
+	    if( ( packet->data == NULL ) ) {
 	    	pthread_rwlock_unlock(packet->lock);
 	    	return ERR_NO_DATA;
 	    }
@@ -908,6 +915,9 @@ static int *recorder_func(void *arg)
 	memcpy(&ctrl, (recorder_job_t*)arg, sizeof(recorder_job_t));
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
+    signal(SIGSEGV, signal_handler);
+    signal(SIGFPE,  signal_handler);
+    signal(SIGBUS,  signal_handler);
     sprintf(fname, "%d%d-%d",ctrl.t_id,ctrl.init.video_channel, time_get_now_stamp());
     misc_set_thread_name(fname);
     pthread_detach(pthread_self());
@@ -928,7 +938,7 @@ static int *recorder_func(void *arg)
 	log_qcy(DEBUG_INFO, "now=%ld", time_get_now_stamp());
 	log_qcy(DEBUG_INFO, "start=%ld", ctrl.run.start);
 	log_qcy(DEBUG_INFO, "end=%ld", ctrl.run.stop);
-	log_qcy(DEBUG_INFO, "video channel=%d", ctrl.t_id);
+	log_qcy(DEBUG_INFO, "recorder channel=%d", ctrl.t_id);
 	log_qcy(DEBUG_INFO, "--------------------------------------------------");
     ctrl.status = RECORDER_THREAD_STARTED;
     while( 1 ) {
@@ -992,7 +1002,7 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 	ret = recorder_thread_close( ctrl );
 	if(ret) {
         msg_init(&msg);
-        msg.sender = msg.receiver = SERVER_VIDEO2;
+        msg.sender = msg.receiver = SERVER_VIDEO;
         msg.message = MSG_DEVICE_ACTION;
         msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
         server_device_message(&msg);
@@ -1241,7 +1251,7 @@ static int server_message_proc(void)
 					   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
 					   server_device_message(&send_msg);
 
-					   send_msg.sender = send_msg.receiver = SERVER_VIDEO2;
+					   send_msg.sender = send_msg.receiver = SERVER_VIDEO;
 					   send_msg.message = MSG_DEVICE_ACTION;
 					   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
 					   server_device_message(&send_msg);
@@ -1469,6 +1479,9 @@ static void *server_func(void)
 {
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
+    signal(SIGSEGV, signal_handler);
+    signal(SIGFPE,  signal_handler);
+    signal(SIGBUS,  signal_handler);
 	misc_set_thread_name("server_recorder");
 	pthread_detach(pthread_self());
 	msg_buffer_init2(&message, MSG_BUFFER_OVERFLOW_NO, &mutex);
@@ -1552,7 +1565,7 @@ int server_recorder_audio_message(message_t *msg)
 	int ret = 0, id = -1;
 	id = msg->arg_in.wolf;
 	pthread_mutex_lock(&vmutex[id]);
-	if( (!video_buff[id].init) ) {
+	if( (!audio_buff[id].init) ) {
 		log_qcy(DEBUG_WARNING, "recorder audio [ch=%d] is not ready for message processing!", id);
 		pthread_mutex_unlock(&vmutex[id]);
 		return -1;
