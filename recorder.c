@@ -27,6 +27,8 @@
 #include <sys/socket.h>
 #include <linux/netlink.h>
 #include <sys/mount.h>
+#include <malloc.h>
+
 //program header
 #include "../../manager/manager_interface.h"
 #include "../../server/realtek/realtek_interface.h"
@@ -1122,6 +1124,7 @@ static void server_release_2(void)
 
 static void server_release_3(void)
 {
+	msg_free(&info.task.msg);
 	memset(&info, 0, sizeof(server_info_t));
 }
 
@@ -1171,10 +1174,10 @@ static int server_message_proc(void)
 	}
 	log_qcy(DEBUG_VERBOSE, "-----pop out from the RECORDER message queue: sender=%d, message=%x, ret=%d, head=%d, tail=%d", msg.sender, msg.message,
 			ret, message.head, message.tail);
-	msg_init(&info.task.msg);
-	msg_deep_copy(&info.task.msg, &msg);
 	switch(msg.message) {
 		case MSG_RECORDER_ADD:
+			msg_init(&info.task.msg);
+			msg_deep_copy(&info.task.msg, &msg);
 			info.task.func = task_add_job;
 			if(info.status2)
 				info.msg_lock = 1;
@@ -1182,6 +1185,8 @@ static int server_message_proc(void)
 		case MSG_RECORDER_ADD_ACK:
 			break;
 		case MSG_MANAGER_EXIT:
+			msg_init(&info.task.msg);
+			msg_copy(&info.task.msg, &msg);
 			info.task.func = task_exit;
 			info.status = EXIT_INIT;
 			info.msg_lock = 0;

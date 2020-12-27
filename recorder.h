@@ -33,14 +33,6 @@
 
 #define		RECORDER_EXIT_CONDITION					0
 
-#define EPOLL_FD_SIZE     3   //需要监听的fd个数
-#define EPOLL_EVENT_SIZE  2
-#define EPOLL_TIMEOUT     1000  //等待的超时时间，1000ms 也就是1秒
-
-#ifndef KERNEL_UEVENT_LEN
-#define KERNEL_UEVENT_LEN      (4*1024)
-#endif
-
 /*
  * structure
  */
