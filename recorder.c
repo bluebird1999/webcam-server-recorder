@@ -28,7 +28,9 @@
 #include <linux/netlink.h>
 #include <sys/mount.h>
 #include <malloc.h>
-
+#ifdef DMALLOC_ENABLE
+#include <dmalloc.h>
+#endif
 //program header
 #include "../../manager/manager_interface.h"
 #include "../../server/realtek/realtek_interface.h"
@@ -38,6 +40,9 @@
 #include "../../server/audio/audio_interface.h"
 #include "../../server/device/device_interface.h"
 #include "../../server/micloud/micloud_interface.h"
+#include "../../server/video/video_interface.h"
+#include "../../server/video2/video2_interface.h"
+#include "../../server/video3/video3_interface.h"
 //server header
 #include "recorder.h"
 
@@ -417,6 +422,10 @@ static int recorder_thread_start_stream( recorder_job_t *ctrl )
 		}
     }
     /****************************/
+    msg.arg_in.wolf = VIDEO3_RUN_MODE_SNAP;
+    msg.message = MSG_VIDEO3_START;
+    manager_common_send_message(SERVER_VIDEO3, &msg);
+    /****************************/
 }
 
 static int recorder_thread_stop_stream( recorder_job_t *ctrl )
@@ -449,6 +458,10 @@ static int recorder_thread_stop_stream( recorder_job_t *ctrl )
 			log_qcy(DEBUG_WARNING, "audio stop failed from recorder!");
 		}
     }
+    /****************************/
+    msg.arg_in.wolf = 2;		//from video3.h for RUN_MODE_SNAP
+    msg.message = MSG_VIDEO3_START;
+    manager_common_send_message(SERVER_VIDEO3, &msg);
     /****************************/
 }
 
@@ -543,7 +556,8 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 		}
 		else {
 			memset(alltime, 0, sizeof(alltime));
-			sprintf( alltime, "%s%s/%s-%s_%s_f.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
+//			sprintf( alltime, "%s%s/%s-%s_%s_f.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
+			sprintf( alltime, "%s%s/%s-%s_%s.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
 			ret = rename(snapname, alltime);
 			if(ret) {
 	            msg_init(&msg);
@@ -555,7 +569,10 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 			}
 			else {
 				log_qcy(DEBUG_INFO, "Record snapshot file is %s\n", alltime);
-				/********message body********/
+			}
+			/*
+			else {
+				log_qcy(DEBUG_INFO, "Record snapshot file is %s\n", alltime);
 				msg_init(&msg);
 				msg.message = MSG_VIDE0_SNAPSHOT_THUMB;
 				msg.sender = msg.receiver = SERVER_RECORDER;
@@ -564,6 +581,7 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 				msg.arg_size = strlen(alltime) + 1;
 				ret = manager_common_send_message(SERVER_VIDEO, &msg);
 			}
+		*/
 		}
 	}
 	return ret;
@@ -728,8 +746,8 @@ static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 		msg.arg_in.chick = ctrl->init.type;
 		msg.arg = fname;
 		msg.arg_size = strlen(fname) + 1;
-		msg.message = MSG_VIDEO_SNAPSHOT;
-		manager_common_send_message(SERVER_VIDEO, &msg);
+		msg.message = MSG_VIDEO3_SNAPSHOT;
+		manager_common_send_message(SERVER_VIDEO3, &msg);
 		/**********************************************/
 	}
 	return ret;
@@ -786,7 +804,7 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	pthread_mutex_unlock(&vmutex[ctrl->t_id]);
 	if ( !ret_audio ) {
 		packet = (av_packet_t*)(amsg.arg);
-	    pthread_rwlock_wrlock(packet->lock);
+	    pthread_rwlock_rdlock(packet->lock);
 	    if( ( (*(packet->init))==0 ) ) {
 	    	av_packet_sub(packet);
 	    	pthread_rwlock_unlock(packet->lock);
@@ -832,7 +850,7 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	}
 	if( !ret_video ) {
 		packet = (av_packet_t*)(vmsg.arg);
-	    pthread_rwlock_wrlock(packet->lock);
+	    pthread_rwlock_rdlock(packet->lock);
 	    if( ( *(packet->init)==0  ) ) {
 	    	av_packet_sub(packet);
 	    	pthread_rwlock_unlock(packet->lock);
