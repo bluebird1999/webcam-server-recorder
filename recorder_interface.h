@@ -20,7 +20,7 @@
 /*
  * define
  */
-#define		SERVER_RECORDER_VERSION_STRING		"alpha-6.0"
+#define		SERVER_RECORDER_VERSION_STRING		"alpha-7.0"
 
 #define		MSG_RECORDER_BASE						(SERVER_RECORDER<<16)
 #define		MSG_RECORDER_SIGINT						(MSG_RECORDER_BASE | 0x0000)

@@ -40,14 +40,12 @@
 #include "../../server/audio/audio_interface.h"
 #include "../../server/device/device_interface.h"
 #include "../../server/micloud/micloud_interface.h"
+#include "../../server/kernel/kernel_interface.h"
 #include "../../server/video/video_interface.h"
 #include "../../server/video2/video2_interface.h"
 #include "../../server/video3/video3_interface.h"
 //server header
 #include "recorder.h"
-
-#include "../video/video_interface.h"
-#include "../video2/video2_interface.h"
 #include "recorder_interface.h"
 #include "config.h"
 
@@ -85,16 +83,15 @@ static int recorder_add_job( message_t* msg );
 static int count_job_number(void);
 static int *recorder_func(void *arg);
 static int recorder_thread_init_mp4v2( recorder_job_t *ctrl);
-static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, av_packet_t *msg );
+static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, unsigned char* data, int length, av_data_info_t *info );
 static int recorder_thread_close( recorder_job_t *ctrl );
 static int recorder_thread_check_finish( recorder_job_t *ctrl );
 static int recorder_thread_error( recorder_job_t *ctrl);
 static int recorder_thread_pause( recorder_job_t *ctrl);
 static int recorder_thread_destroy( recorder_job_t *ctrl );
 static int recorder_thread_start_stream( recorder_job_t *ctrl );
-static int recorder_thread_stop_stream( recorder_job_t *ctrl );
-static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl );
-static int count_job_other_live(int myself);
+static int recorder_thread_stop_stream( recorder_job_t *ctrl, int real_stop);
+static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl, int real_stop);
 static int recorder_start_init_recorder_job(void);
 static int recorder_get_property(message_t *msg);
 static int recorder_set_property(message_t *msg);
@@ -127,7 +124,7 @@ static int recorder_clean_disk(void)
 	char 	path[MAX_SYSTEM_STRING_SIZE*4];
 	char 	name[MAX_SYSTEM_STRING_SIZE*4];
 	char 	thisdate[MAX_SYSTEM_STRING_SIZE];
-	unsigned long long int cutoff_date, today;
+	unsigned long long int cutoff_date;
 	char 	*p = NULL;
 	unsigned long long int start, block_time, now;
 	int		i = 0;
@@ -140,23 +137,17 @@ static int recorder_clean_disk(void)
 	msg.sender = msg.receiver = SERVER_RECORDER;
 	manager_common_send_message(SERVER_PLAYER, &msg);
 	/****************************/
-	memset(thisdate, 0, sizeof(thisdate));
 	now = time_get_now_stamp();
-	time_stamp_to_date( now, thisdate);
-	strcpy(&thisdate[8], "000000");
-	thisdate[14] = '\0';
-	today = time_date_to_stamp(thisdate);
 	block_time = 0;
 	memset(thisdate, 0, sizeof(thisdate));
-	time_stamp_to_date(now, thisdate);
-	log_qcy(DEBUG_INFO, "----------current time is %s-------", thisdate);
+	time_stamp_to_date_with_zone(now, thisdate, 80, _config_.timezone);
+	log_qcy(DEBUG_INFO, "----------current time is UTC+8 %s-------", thisdate);
 restart:
 	log_qcy(DEBUG_INFO, "----------start sd cleanning job-------");
-//	cutoff_date = today - 0 * 86400 + block_time;
 	cutoff_date = now - 1 * 86400 + block_time;
 	memset(thisdate, 0, sizeof(thisdate));
-	time_stamp_to_date(cutoff_date, thisdate);
-	log_qcy(DEBUG_INFO, "----------delete media file before %s-------", thisdate);
+	time_stamp_to_date_with_zone(cutoff_date, thisdate, 80, _config_.timezone);
+	log_qcy(DEBUG_INFO, "----------delete media file before UTC+8 %s-------", thisdate);
 	while( i < 3 ) {
 		memset(path, 0, sizeof(path));
 		if( i == 0 ) {
@@ -205,7 +196,7 @@ restart:
 				if(p){
 					memset(name, 0, sizeof(name));
 					memcpy(name, p, 14);
-					start = time_date_to_stamp( name );
+					start = time_date_to_stamp_with_zone( name, 80, _config_.timezone );
 					if( start < cutoff_date) {
 						//remove
 						memset(name, 0, sizeof(name));
@@ -428,12 +419,13 @@ static int recorder_thread_start_stream( recorder_job_t *ctrl )
     /****************************/
 }
 
-static int recorder_thread_stop_stream( recorder_job_t *ctrl )
+static int recorder_thread_stop_stream( recorder_job_t *ctrl, int real_stop )
 {
 	message_t msg;
     /********message body********/
 	memset(&msg,0,sizeof(message_t));
 	msg.arg_in.wolf = ctrl->t_id;
+	msg.arg_in.duck = real_stop;
 	if( ctrl->init.video_channel == 0)
 		msg.message = MSG_VIDEO_STOP;
 	else if( ctrl->init.video_channel == 1)
@@ -454,13 +446,15 @@ static int recorder_thread_stop_stream( recorder_job_t *ctrl )
 		msg.message = MSG_AUDIO_STOP;
 		msg.sender = msg.receiver = SERVER_RECORDER;
 		msg.arg_in.wolf = ctrl->t_id;
+		msg.arg_in.duck = real_stop;
 		if( manager_common_send_message(SERVER_AUDIO, &msg)!=0 ) {
 			log_qcy(DEBUG_WARNING, "audio stop failed from recorder!");
 		}
     }
     /****************************/
     msg.arg_in.wolf = 2;		//from video3.h for RUN_MODE_SNAP
-    msg.message = MSG_VIDEO3_START;
+    msg.arg_in.duck = real_stop;
+    msg.message = MSG_VIDEO3_STOP;
     manager_common_send_message(SERVER_VIDEO3, &msg);
     /****************************/
 }
@@ -511,8 +505,8 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	memset(start,0,sizeof(start));
 	memset(stop,0,sizeof(stop));
 	memset(prefix,0,sizeof(prefix));
-	time_stamp_to_date(ctrl->run.real_start, start);
-	time_stamp_to_date(ctrl->run.last_write, stop);
+	time_stamp_to_date_with_zone(ctrl->run.real_start, start, 80, _config_.timezone);
+	time_stamp_to_date_with_zone(ctrl->run.last_write, stop, 80, _config_.timezone);
 	if( ctrl->init.type == RECORDER_TYPE_NORMAL) {
 		strcpy( &prefix, ctrl->config.profile.normal_prefix);
 		sprintf( ctrl->run.file_path, "%s%s/%s-%s_%s.mp4",ctrl->config.profile.directory,prefix,prefix,start,stop);
@@ -535,10 +529,10 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 			msg_init(&msg);
 			msg.message = MSG_RECORDER_ADD_FILE;
 			msg.sender = msg.receiver = SERVER_RECORDER;
-			memset(alltime, 0, sizeof(alltime));
-			sprintf(alltime, "%s%s", start, stop);
-			msg.arg = alltime;
-			msg.arg_size = strlen(alltime) + 1;
+			msg.arg = &ctrl->run.real_start;
+			msg.arg_size = sizeof(ctrl->run.real_start);
+			msg.extra = &ctrl->run.last_write;
+			msg.extra_size = sizeof(ctrl->run.last_write);
 			ret = manager_common_send_message(SERVER_PLAYER, &msg);
 		}
 		/***************************/
@@ -547,11 +541,6 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	//snapshot
 	if( ctrl->init.type == RECORDER_TYPE_NORMAL ) {
 		if( (access(snapname, F_OK))== -1) {
-            msg_init(&msg);
-            msg.sender = msg.receiver = SERVER_VIDEO;
-            msg.message = MSG_DEVICE_ACTION;
-            msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
-            server_device_message(&msg);
 			log_qcy(DEBUG_WARNING, "Can't find previously created snapshot %s", snapname);
 		}
 		else {
@@ -560,11 +549,6 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 			sprintf( alltime, "%s%s/%s-%s_%s.jpg",ctrl->config.profile.directory,prefix,prefix,start,stop);
 			ret = rename(snapname, alltime);
 			if(ret) {
-	            msg_init(&msg);
-	            msg.sender = msg.receiver = SERVER_VIDEO;
-	            msg.message = MSG_DEVICE_ACTION;
-	            msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
-	            server_device_message(&msg);
 				log_qcy(DEBUG_WARNING, "rename recording snapshot file %s to %s failed.\n", snapname, alltime);
 			}
 			else {
@@ -587,11 +571,8 @@ static int recorder_thread_close( recorder_job_t *ctrl )
 	return ret;
 }
 
-static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, av_packet_t *packet)
+static int recorder_thread_write_mp4_video( recorder_job_t *ctrl, unsigned char *p_data, int data_length, av_data_info_t *info)
 {
-	unsigned char *p_data = (unsigned char*)packet->data;
-	unsigned int data_length = packet->info.size;
-	av_data_info_t *info = (av_data_info_t*)(&packet->info);
 	nalu_unit_t nalu;
 	int ret;
 	int			frame_len;
@@ -700,7 +681,7 @@ static int recorder_thread_init_mp4v2( recorder_job_t *ctrl)
 		strcpy( &prefix, ctrl->config.profile.motion_prefix);
 	else if( ctrl->init.type == RECORDER_TYPE_ALARM)
 		strcpy( &prefix, ctrl->config.profile.alarm_prefix);
-	time_stamp_to_date(ctrl->run.start, timestr);
+	time_stamp_to_date_with_zone(ctrl->run.start, timestr, 80, _config_.timezone);
 	sprintf(fname,"%s%s/%s-%s",ctrl->config.profile.directory,prefix,prefix,timestr);
 	if( !recorder_check_sd() ) {
 		ctrl->run.mp4_file = MP4CreateEx(fname,	0, 1, 1, 0, 0, 0, 0);
@@ -776,8 +757,11 @@ static int recorder_thread_pause( recorder_job_t *ctrl)
 		log_qcy(DEBUG_SERIOUS, "end=%ld", ctrl->run.stop);
 		log_qcy(DEBUG_SERIOUS, "--------------------------------------------------");
 	}
-	if( time_get_now_stamp() < (ctrl->run.start - MAX_BETWEEN_RECODER_PAUSE) ) {
-		recorder_thread_check_and_exit_stream(ctrl);
+	if( time_get_now_stamp() <= (ctrl->run.start - MAX_BETWEEN_RECODER_PAUSE) ) {
+		recorder_thread_check_and_exit_stream(ctrl, 1);
+	}
+	else {
+		recorder_thread_check_and_exit_stream(ctrl, 0);
 	}
 	return ret;
 }
@@ -788,8 +772,8 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	int 			ret_video = 1, 	ret_audio = 1, ret;
 	av_packet_t 	*packet;
 	unsigned char	*p;
-	MP4Duration duration, offset;
-
+	av_data_info_t	*info;
+	MP4Duration 	duration, offset;
 	//condition
 	pthread_mutex_lock(&vmutex[ctrl->t_id]);
 	if( (video_buff[ctrl->t_id].head == video_buff[ctrl->t_id].tail) &&
@@ -803,21 +787,29 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 	ret_audio = msg_buffer_pop(&audio_buff[ctrl->t_id], &amsg);
 	pthread_mutex_unlock(&vmutex[ctrl->t_id]);
 	if ( !ret_audio ) {
-		packet = (av_packet_t*)(amsg.arg);
-	    pthread_rwlock_rdlock(packet->lock);
-	    if( ( (*(packet->init))==0 ) ) {
-	    	av_packet_sub(packet);
-	    	pthread_rwlock_unlock(packet->lock);
-	    	return ERR_NO_DATA;
-	    }
-	    if( ( packet->data == NULL ) ) {
-	    	pthread_rwlock_unlock(packet->lock);
-	    	return ERR_NO_DATA;
-	    }
+		if( _config_.memory_mode == MEMORY_MODE_SHARED ) {
+			packet = (av_packet_t*)(amsg.arg);
+			p = (unsigned char*)packet->data;
+			info = (av_data_info_t*)(&packet->info);
+			pthread_rwlock_wrlock(packet->lock);
+			if( ( (*(packet->init))==0 ) ) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+				return ERR_NO_DATA;
+			}
+			if( p == NULL ) {
+				pthread_rwlock_unlock(packet->lock);
+				return ERR_NO_DATA;
+			}
+		}
+		else {
+			p = (unsigned char*)(amsg.arg);
+			info = (av_data_info_t*)(amsg.extra);
+		}
 		if( ctrl->run.first_frame ) {
 			if( ctrl->run.first_audio ) {
-				duration 	= ( packet->info.timestamp - ctrl->run.last_aframe_stamp) * 90000 / 1000;
-				offset 		= ( packet->info.timestamp - ctrl->run.first_frame_stamp) * 90000 / 1000;
+				duration 	= ( info->timestamp - ctrl->run.last_aframe_stamp) * 90000 / 1000;
+				offset 		= ( info->timestamp - ctrl->run.first_frame_stamp) * 90000 / 1000;
 			}
 			else {
 				duration	= 32 * 90000 / 1000;	//8k mono channel
@@ -826,71 +818,95 @@ static int recorder_thread_run( recorder_job_t *ctrl)
 			}
 			if( !recorder_check_sd() ) {
 				ret = MP4WriteSample( ctrl->run.mp4_file, ctrl->run.audio_track,
-						(unsigned char*)packet->data, packet->info.size ,
+						p, info->size ,
 						256, 0, 1);
 			}
 			else {
-				av_packet_sub(packet);
-				pthread_rwlock_unlock(packet->lock);
+				if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+					av_packet_sub(packet);
+					pthread_rwlock_unlock(packet->lock);
+				}
 				ret = ERR_ERROR;
 				log_qcy(DEBUG_WARNING, "SD protection happened!---audio write aborted!\n");
 				goto close_exit;
 			}
 			if( !ret ) {
-				av_packet_sub(packet);
-				pthread_rwlock_unlock(packet->lock);
+				if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+					av_packet_sub(packet);
+					pthread_rwlock_unlock(packet->lock);
+				}
 				ret = ERR_ERROR;
 				log_qcy(DEBUG_WARNING, "MP4WriteSample audio failed.\n");
 				goto close_exit;
 			}
-			ctrl->run.last_aframe_stamp = packet->info.timestamp;
+			ctrl->run.last_aframe_stamp = info->timestamp;
 		}
-		av_packet_sub(packet);
-		pthread_rwlock_unlock(packet->lock);
+		if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+			av_packet_sub(packet);
+			pthread_rwlock_unlock(packet->lock);
+		}
 	}
 	if( !ret_video ) {
-		packet = (av_packet_t*)(vmsg.arg);
-	    pthread_rwlock_rdlock(packet->lock);
-	    if( ( *(packet->init)==0  ) ) {
-	    	av_packet_sub(packet);
-	    	pthread_rwlock_unlock(packet->lock);
-	    	return ERR_NO_DATA;
-	    }
-	    if( ( packet->data == NULL ) ) {
-	    	pthread_rwlock_unlock(packet->lock);
-	    	return ERR_NO_DATA;
-	    }
-		if( ctrl->run.first_frame && packet->info.fps != ctrl->run.fps) {
+		if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+			packet = (av_packet_t*)(vmsg.arg);
+			p = (unsigned char*)packet->data;
+			info = (av_data_info_t*)(&packet->info);
+			pthread_rwlock_wrlock(packet->lock);
+			if( ( *(packet->init)==0  ) ) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+				return ERR_NO_DATA;
+			}
+			if( packet->data == NULL ) {
+				pthread_rwlock_unlock(packet->lock);
+				return ERR_NO_DATA;
+			}
+		}
+		else {
+			p = (unsigned char*)(vmsg.arg);
+			info = (av_data_info_t*)(vmsg.extra);
+		}
+		if( ctrl->run.first_frame && info->fps != ctrl->run.fps) {
 			log_qcy(DEBUG_SERIOUS, "the video fps has changed, stop recording!");
 			ret = ERR_ERROR;
-			av_packet_sub(packet);
-			pthread_rwlock_unlock(packet->lock);
+			if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+			}
 			goto close_exit;
 		}
-		if(  ctrl->run.first_frame && (packet->info.width != ctrl->run.width || packet->info.height != ctrl->run.height) ) {
+		if(  ctrl->run.first_frame && (info->width != ctrl->run.width || info->height != ctrl->run.height) ) {
 			log_qcy(DEBUG_SERIOUS, "the video dimention has changed, stop recording!");
 			ret = ERR_ERROR;
-			av_packet_sub(packet);
-			pthread_rwlock_unlock(packet->lock);
+			if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+			}
 			goto close_exit;
 		}
-		ret = recorder_thread_write_mp4_video( ctrl, packet);
+		ret = recorder_thread_write_mp4_video( ctrl, p, info->size, info);
 		if(ret ==-1 ) {
 			log_qcy(DEBUG_WARNING, "MP4WriteSample video failed.\n");
 			ret = ERR_NO_DATA;
-			av_packet_sub(packet);
-			pthread_rwlock_unlock(packet->lock);
+			if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+			}
 			goto exit;
 		}
 		if( recorder_thread_check_finish(ctrl) ) {
 			log_qcy(DEBUG_INFO, "------------stop=%d------------", time_get_now_stamp());
 			log_qcy(DEBUG_INFO, "recording finished!");
-			av_packet_sub(packet);
-			pthread_rwlock_unlock(packet->lock);
+			if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+				av_packet_sub(packet);
+				pthread_rwlock_unlock(packet->lock);
+			}
 			goto close_exit;
 		}
-		av_packet_sub(packet);
-		pthread_rwlock_unlock(packet->lock);
+		if( _config_.memory_mode == MEMORY_MODE_SHARED) {
+			av_packet_sub(packet);
+			pthread_rwlock_unlock(packet->lock);
+		}
 	}
 exit:
 	if( !ret_video )
@@ -935,22 +951,21 @@ static int *recorder_func(void *arg)
 	memcpy(&ctrl, (recorder_job_t*)arg, sizeof(recorder_job_t));
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
-    signal(SIGSEGV, signal_handler);
-    signal(SIGFPE,  signal_handler);
-    signal(SIGBUS,  signal_handler);
     sprintf(fname, "%d%d-%d",ctrl.t_id,ctrl.init.video_channel, time_get_now_stamp());
     misc_set_thread_name(fname);
     pthread_detach(pthread_self());
-	msg_buffer_init2(&video_buff[ctrl.t_id], MSG_BUFFER_OVERFLOW_YES, &vmutex[ctrl.t_id]);
-	msg_buffer_init2(&audio_buff[ctrl.t_id], MSG_BUFFER_OVERFLOW_YES, &vmutex[ctrl.t_id]);
+	msg_buffer_init2(&video_buff[ctrl.t_id], _config_.recorder_avmsg_overrun, &vmutex[ctrl.t_id]);
+	msg_buffer_init2(&audio_buff[ctrl.t_id], _config_.recorder_avmsg_overrun, &vmutex[ctrl.t_id]);
 	if (ctrl.init.start[0] == '0')
 		ctrl.run.start = time_get_now_stamp();
-	else
+	else {
 		ctrl.run.start = time_date_to_stamp(ctrl.init.start);// - _config_.timezone * 3600;
+	}
 	if (ctrl.init.stop[0] == '0')
 		ctrl.run.stop = ctrl.run.start + ctrl.config.profile.max_length;
-	else
+	else {
 		ctrl.run.stop = time_date_to_stamp( ctrl.init.stop);// - _config_.timezone * 3600;
+	}
 	if( (ctrl.run.stop - ctrl.run.start) < ctrl.config.profile.min_length ||
 			(ctrl.run.stop - ctrl.run.start) > ctrl.config.profile.max_length )
 		ctrl.run.stop = ctrl.run.start + ctrl.config.profile.max_length;
@@ -1003,15 +1018,10 @@ static int *recorder_func(void *arg)
     pthread_exit(0);
 }
 
-static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl )
+static int recorder_thread_check_and_exit_stream( recorder_job_t *ctrl, int real_stop)
 {
-	int ret=0,ret1;
-	int i;
-	pthread_rwlock_wrlock(&ilock);
-//	if( !count_job_other_live(ctrl->t_id) ) {
-		recorder_thread_stop_stream( ctrl );
-//	}
-	pthread_rwlock_unlock(&ilock);
+	int ret=0;
+	ret = recorder_thread_stop_stream( ctrl, real_stop);
 	return ret;
 }
 
@@ -1020,16 +1030,9 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 	int ret=0,ret1;
 	message_t msg;
 	ret = recorder_thread_close( ctrl );
-	if(ret) {
-        msg_init(&msg);
-        msg.sender = msg.receiver = SERVER_VIDEO;
-        msg.message = MSG_DEVICE_ACTION;
-        msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
-        server_device_message(&msg);
-	}
 	msg_buffer_release2(&video_buff[ctrl->t_id], &vmutex[ctrl->t_id]);
 	msg_buffer_release2(&audio_buff[ctrl->t_id], &vmutex[ctrl->t_id]);
-	recorder_thread_stop_stream( ctrl );
+	recorder_thread_stop_stream( ctrl, 1);
 
 	pthread_rwlock_wrlock(&ilock);
 	misc_set_bit( &info.thread_start, ctrl->t_id, 0);
@@ -1037,18 +1040,6 @@ static int recorder_thread_destroy( recorder_job_t *ctrl )
 	memset(&jobs[ctrl->t_id], 0, sizeof(recorder_job_t));
 	pthread_rwlock_unlock(&ilock);
 	return ret;
-}
-
-static int count_job_other_live(int myself)
-{
-	int i,num=0;
-	for( i=0; (i<MAX_RECORDER_JOB) && (i!=myself); i++ ) {
-		if( jobs[i].status>0  ) {
-			if( jobs[i].init.video_channel == jobs[myself].init.video_channel )
-				num++;
-		}
-	}
-	return num;
 }
 
 static int count_job_number(void)
@@ -1273,12 +1264,6 @@ static int server_message_proc(void)
 					   send_msg.message = MSG_DEVICE_ACTION;
 					   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
 					   server_device_message(&send_msg);
-
-					   send_msg.sender = send_msg.receiver = SERVER_VIDEO;
-					   send_msg.message = MSG_DEVICE_ACTION;
-					   send_msg.arg_in.cat = DEVICE_ACTION_SD_EJECTED_ACK;
-					   server_device_message(&send_msg);
-
 					}
 					else {
 						device_umount_flag = 1;
@@ -1290,6 +1275,8 @@ static int server_message_proc(void)
 				info.tick = 0;	//restart the device check
 			}
  			break;
+		case MSG_KERNEL_TIMEZONE_CHANGE:
+			break;
 		default:
 			log_qcy(DEBUG_SERIOUS, "not processed message = %x", msg.message);
 			break;
@@ -1502,12 +1489,9 @@ static void *server_func(void)
 {
     signal(SIGINT, server_thread_termination);
     signal(SIGTERM, server_thread_termination);
-    signal(SIGSEGV, signal_handler);
-    signal(SIGFPE,  signal_handler);
-    signal(SIGBUS,  signal_handler);
 	misc_set_thread_name("server_recorder");
 	pthread_detach(pthread_self());
-	msg_buffer_init2(&message, MSG_BUFFER_OVERFLOW_NO, &mutex);
+	msg_buffer_init2(&message, _config_.msg_overrun, &mutex);
 	info.init = 1;
 	//default task
 	info.task.func = task_default;

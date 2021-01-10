@@ -16,7 +16,7 @@
  * define
  */
 #define		THREAD_EPOLL					4
-#define		MAX_BETWEEN_RECODER_PAUSE		5		//5s
+#define		MAX_BETWEEN_RECODER_PAUSE		3		//3s
 #define		TIMEOUT							3		//3s
 #define		MIN_SD_SIZE_IN_MB				64		//64M
 
