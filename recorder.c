@@ -744,7 +744,14 @@ static int recorder_thread_pause( recorder_job_t *ctrl)
 	}
 	else {
 		temp1 = ctrl->run.real_stop;
-		temp2 = ctrl->run.stop - ctrl->run.start;
+		if((temp1 + ctrl->init.repeat_interval) % 60 != 0)
+		{
+			temp2 = ctrl->config.profile.max_length - ((temp1 + ctrl->init.repeat_interval)%ctrl->config.profile.max_length);
+		}else
+		{
+			temp2 = config.profile.max_length;
+		}
+		//temp2 = ctrl->run.stop - ctrl->run.start;
 		memset( &ctrl->run, 0, sizeof( recorder_run_t));
 		if( temp1 == 0)
 			temp1 = time_get_now_stamp();
@@ -962,7 +969,7 @@ static int *recorder_func(void *arg)
 		ctrl.run.start = time_date_to_stamp(ctrl.init.start);// - _config_.timezone * 3600;
 	}
 	if (ctrl.init.stop[0] == '0')
-		ctrl.run.stop = ctrl.run.start + ctrl.config.profile.max_length;
+		ctrl.run.stop = 60 - (ctrl.run.start % 60) + ctrl.run.start;//ctrl.run.start + ctrl.config.profile.max_length;
 	else {
 		ctrl.run.stop = time_date_to_stamp( ctrl.init.stop);// - _config_.timezone * 3600;
 	}
